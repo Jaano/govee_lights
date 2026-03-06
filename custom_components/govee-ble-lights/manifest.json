@@ -3,19 +3,19 @@
     "name": "Ultimate Govee BLE Lights",
     "integration_type": "hub",
     "bluetooth": [
-        { "local_name": "Govee_*", "connectable": false },
-        { "local_name": "GBK_*", "connectable": false },
-        { "local_name": "ihoment_*", "connectable": false },
+        { "local_name": "Govee_*", "connectable": true },
+        { "local_name": "GBK_*", "connectable": true },
+        { "local_name": "ihoment_*", "connectable": true },
         {
-            "service_uuid": "00010203-0405-0607-0809-0a0b0c0d2b11", "connectable": false
+            "service_uuid": "00010203-0405-0607-0809-0a0b0c0d2b11", "connectable": true
         }
     ],
-    "codeowners": ["@Laserology"],
+    "codeowners": ["@Jaano", "@Laserology"],
     "requirements": ["bleak-retry-connector"],
     "dependencies": ["network"],
-    "issue_tracker": "https://github.com/Laserology/govee_ble_lights/issues",
-    "documentation": "https://github.com/Laserology/govee_ble_lights",
+    "issue_tracker": "https://github.com/Jaano/govee_ble_lights/issues",
+    "documentation": "https://github.com/Jaano/govee_ble_lights",
     "config_flow": true,
-    "iot_class": "local_polling",
+    "iot_class": "local_push",
     "version": "0.1.1"
 }

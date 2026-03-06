@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-
 from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -35,7 +33,7 @@ async def internal_api_setup(hass: HomeAssistant, entry: ConfigEntry):
     api = GoveeAPI(api_key)
 
     devices = await api.list_devices()
-    _LOGGER.debug(f"Govee devices: %s", devices)
+    _LOGGER.debug("Govee devices: %s", devices)
 
     store = Store(hass, 1, f"{DOMAIN}/{api_key}.json")
     await store.async_save(devices)

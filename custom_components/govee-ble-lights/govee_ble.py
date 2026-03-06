@@ -4,9 +4,14 @@ This file contains all functionality pertaining to Govee BLE lights, including d
 
 from enum import IntEnum
 import array
+import asyncio
+import logging
+from typing import Any
 
 from bleak import BleakClient
 import bleak_retry_connector as brc
+
+_LOGGER = logging.getLogger(__name__)
 
 class GoveeBLE:
     """ This class is used to connect to and control Govee branded BLE LED lights. """
@@ -27,8 +32,68 @@ class GoveeBLE:
         SEGMENTS = 0x15
 
     UUID_CONTROL_CHARACTERISTIC = '00010203-0405-0607-0809-0a0b0c0d2b11'
+    UUID_NOTIFY_CHARACTERISTIC  = '00010203-0405-0607-0809-0a0b0c0d2b12'
     SEGMENTED_MODELS = ['H6053', 'H6072', 'H6102', 'H6199', 'H617A', 'H617C']
     PERCENT_MODELS = ['H617A', 'H617C']
+
+    @staticmethod
+    async def query_state(client: BleakClient) -> dict:
+        """
+        Queries power, brightness, and color state from the device in a single connection.
+        Sends 0xAA query packets and collects notification responses.
+        Returns a dict with keys: 'power' (bool|None), 'brightness' (int|None),
+        'rgb' (tuple|None), 'mode' (int|None).
+        """
+        COMMANDS = [
+            GoveeBLE.LEDCommand.POWER,
+            GoveeBLE.LEDCommand.BRIGHTNESS,
+            GoveeBLE.LEDCommand.COLOR,
+        ]
+        state: dict[str, Any] = {'power': None, 'brightness': None, 'rgb': None, 'mode': None}
+        events = {cmd: asyncio.Event() for cmd in COMMANDS}
+
+        def notification_handler(sender, data: bytearray) -> None:
+            _LOGGER.debug("State notification: %s", data.hex())
+            if len(data) < 3 or data[0] != 0xAA:
+                return
+            cmd = data[1]
+            if cmd == GoveeBLE.LEDCommand.POWER:
+                state['power'] = data[2] == 0x01
+                _LOGGER.debug("Power: %s", state['power'])
+                events[GoveeBLE.LEDCommand.POWER].set()
+            elif cmd == GoveeBLE.LEDCommand.BRIGHTNESS:
+                state['brightness'] = data[2]
+                _LOGGER.debug("Brightness: %d", state['brightness'])
+                events[GoveeBLE.LEDCommand.BRIGHTNESS].set()
+            elif cmd == GoveeBLE.LEDCommand.COLOR:
+                state['mode'] = data[2]
+                if len(data) >= 6:
+                    state['rgb'] = (data[3], data[4], data[5])
+                _LOGGER.debug("Mode: 0x%02x, RGB: %s", state['mode'], state['rgb'])
+                events[GoveeBLE.LEDCommand.COLOR].set()
+
+        try:
+            await client.start_notify(GoveeBLE.UUID_NOTIFY_CHARACTERISTIC, notification_handler)
+
+            for cmd in COMMANDS:
+                frame = bytes([0xAA, cmd]) + bytes(17)
+                frame += bytes([GoveeBLE.sign_payload(frame)])
+                _LOGGER.debug("Sending state query 0x%02x: %s", cmd, frame.hex())
+                await client.write_gatt_char(GoveeBLE.UUID_CONTROL_CHARACTERISTIC, frame, False)
+                try:
+                    await asyncio.wait_for(events[cmd].wait(), timeout=3.0)
+                except asyncio.TimeoutError:
+                    _LOGGER.warning("Timeout waiting for response to query 0x%02x", cmd)
+
+        except Exception as err:
+            _LOGGER.error("Failed to query device state: %s", err)
+        finally:
+            try:
+                await client.stop_notify(GoveeBLE.UUID_NOTIFY_CHARACTERISTIC)
+            except Exception:
+                pass
+
+        return state
 
     @staticmethod
     async def send_multi_packet(client: BleakClient, protocol_type, header_array, data):
@@ -93,8 +158,10 @@ class GoveeBLE:
         additional_buffer[19] = GoveeBLE.sign_payload(additional_buffer[0:19])
         result.append(additional_buffer)
 
-        for r in result:
+        for i, r in enumerate(result):
+            _LOGGER.debug("Sending multi-packet frame %d/%d: %s", i + 1, len(result), r.tobytes().hex())
             await GoveeBLE.send_single_frame(client, r)
+            await asyncio.sleep(0.05)
 
     @staticmethod
     async def send_single_packet(client: BleakClient, cmd, payload):
@@ -137,6 +204,7 @@ class GoveeBLE:
             await client.connect()
             retry += 1
 
+        _LOGGER.debug("Writing frame: %s", bytes(frame).hex())
         await client.write_gatt_char(GoveeBLE.UUID_CONTROL_CHARACTERISTIC, frame, False)
 
     @staticmethod
@@ -150,7 +218,7 @@ class GoveeBLE:
         for _ in range(3):
             try:
                 return await brc.establish_connection(BleakClient, device, identifier)
-            except:
+            except Exception:
                 continue
 
     @staticmethod

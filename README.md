@@ -86,7 +86,7 @@ If you're facing issues with the integration, consider the following steps:
 
 - **Found an Issue?** 
    
-   Raise it in the [Issues section](https://github.com/Laserology/govee_ble_lights/issues) of this repository.
+   Raise it in the [Issues section](https://github.com/Jaano/govee_ble_lights/issues) of this repository.
 
 - **Device support**:
 

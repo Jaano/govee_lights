@@ -5,15 +5,12 @@ It only contains the basic methods, and uses govee_ble to talk to govee devices.
 
 from __future__ import annotations
 
-from datetime import timedelta
 from pathlib import Path
 import logging
-#import asyncio
+import asyncio
 import base64
 import array
 import json
-#import time
-import re
 
 from homeassistant.components import bluetooth
 from homeassistant.components.light import (
@@ -21,11 +18,13 @@ from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
     ATTR_RGB_COLOR,
     ATTR_EFFECT,
+    EFFECT_OFF,
     LightEntityFeature,
     LightEntity,
     ColorMode)
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.storage import Store
 import homeassistant.util.color as color_util
 from homeassistant.core import HomeAssistant
@@ -34,10 +33,7 @@ from .govee_ble import GoveeBLE
 from .const import DOMAIN
 from . import Hub
 
-EFFECT_PARSE = re.compile(r"\[(\d+)/(\d+)/(\d+)/(\d+)\]")
 _LOGGER = logging.getLogger(__name__)
-SCAN_INTERVAL = timedelta(seconds=30)
-# json_data = json.loads("{}")
 
 async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, async_add_entities):
     if config_entry.entry_id in hass.data[DOMAIN]:
@@ -192,10 +188,9 @@ class GoveeAPILight(LightEntity, dict):
         self._state = False
 
 class GoveeBluetoothLight(LightEntity):
-    _attr_supported_features = LightEntityFeature(
-        LightEntityFeature.EFFECT | LightEntityFeature.FLASH | LightEntityFeature.TRANSITION)
+    _attr_supported_features = LightEntityFeature(LightEntityFeature.EFFECT)
     _attr_supported_color_modes = {ColorMode.RGB}
-    _attr_color_mode = ColorMode.RGB
+    _attr_has_entity_name = True
 
     _client = None
 
@@ -211,32 +206,97 @@ class GoveeBluetoothLight(LightEntity):
         self._brightness = 0
         self._state = False
         self._rgb_color = None
+        self._current_effect: str | None = None
+        self._effect_list: list[str] | None = None
+        self._effect_map: dict[str, tuple] | None = None
+        self._model_data: dict | None = None
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, self._mac)},
+            name=self._model,
+            manufacturer="Govee",
+            model=self._model,
+        )
 
-        # Ensure stable connection with reconnect loop.
-        # loop = asyncio.get_running_loop()
-        # loop.create_task(self.ensure_connection)
+    def _load_effect_list(self) -> list[str]:
+        """Build the effect list from the JSON file. Runs in an executor thread."""
+        self._model_data = json.loads(
+            Path(Path(__file__).parent, "jsons", self._model + ".json").read_text()
+        )
+        self._effect_map = {}
+        effect_list = []
+        for categoryIdx, category in enumerate(self._model_data['data']['categories']):
+            for sceneIdx, scene in enumerate(category['scenes']):
+                for leffectIdx, lightEffect in enumerate(scene['lightEffects']):
+                    for seffectIdx, specialEffect in enumerate(lightEffect['specialEffect']):
+                        if 'supportSku' in specialEffect and self._model not in specialEffect['supportSku']:
+                            continue
+                        name = category['categoryName'] + " - " + scene['sceneName']
+                        if lightEffect['scenceName']:
+                            name += ' - ' + lightEffect['scenceName']
+                        # Disambiguate duplicate names
+                        unique_name = name
+                        counter = 2
+                        while unique_name in self._effect_map:
+                            unique_name = f"{name} ({counter})"
+                            counter += 1
+                        self._effect_map[unique_name] = (categoryIdx, sceneIdx, leffectIdx, seffectIdx)
+                        effect_list.append(unique_name)
+        _LOGGER.debug("Loaded %d effects for model %s", len(effect_list), self._model)
+        return effect_list
+
+    async def async_added_to_hass(self) -> None:
+        """Load effect list, query initial device state, and start background keepalive task."""
+        _LOGGER.debug("Loading effect list for model %s", self._model)
+        try:
+            self._effect_list = await self.hass.async_add_executor_job(self._load_effect_list)
+            _LOGGER.debug("Effect list loaded: %d effects", len(self._effect_list))
+        except Exception as err:
+            _LOGGER.error("Failed to load effect list for model %s: %s", self._model, err)
+
+        try:
+            self._client = await GoveeBLE.connect_to(self._ble_device, self.unique_id)
+            state = await GoveeBLE.query_state(self._client)
+            _LOGGER.debug("Initial device state: %s", state)
+
+            if state['power'] is not None:
+                self._state = state['power']
+
+            if state['brightness'] is not None:
+                raw = state['brightness']
+                # Convert percent models back to 0-255 scale for HA
+                self._brightness = int(raw * 255 / 100) if self._use_percent else raw
+
+            if state['rgb'] is not None and state['mode'] == GoveeBLE.LEDMode.MANUAL:
+                self._rgb_color = state['rgb']
+
+            self.async_write_ha_state()
+        except Exception as err:
+            _LOGGER.error("Failed to query initial state for %s: %s", self._mac, err)
+
+        self.hass.async_create_background_task(
+            self.ensure_connection(), "govee_ble_keepalive"
+        )
 
     @property
     def effect_list(self) -> list[str] | None:
-        effect_list = []
-        for categoryIdx, category in enumerate(json.loads(Path(Path(__file__).parent, "jsons", (self._model + ".json")).read_text())['data']['categories']):
-            for sceneIdx, scene in enumerate(category['scenes']):
-                for leffectIdx, lightEffect in enumerate(scene['lightEffects']):
-                    for seffectIxd, specialEffect in enumerate(lightEffect['specialEffect']):
-                        # if 'supportSku' not in specialEffect or self._model in specialEffect['supportSku']:
-                        # Workaround cause we need to store some metadata in effect (effect names not unique)
-                        indexes = str(categoryIdx) + "/" + str(sceneIdx) + "/" + str(leffectIdx) + "/" + str(
-                            seffectIxd)
-                        effect_list.append(
-                            category['categoryName'] + " - " + scene['sceneName'] + ' - ' + lightEffect[
-                                'scenceName'] + " [" + indexes + "]")
-
-        return effect_list
+        return self._effect_list
 
     @property
-    def name(self) -> str:
-        """Return the name of the switch."""
-        return "GOVEE Light"
+    def effect(self) -> str | None:
+        """Return the current effect."""
+        return self._current_effect
+
+    @property
+    def color_mode(self) -> ColorMode:
+        """Return current color mode. BRIGHTNESS when an effect is active."""
+        if self._current_effect and self._current_effect != EFFECT_OFF:
+            return ColorMode.BRIGHTNESS
+        return ColorMode.RGB
+
+    @property
+    def name(self) -> str | None:
+        """Return None — this is the primary entity for the device."""
+        return None
 
     @property
     def unique_id(self) -> str:
@@ -252,34 +312,15 @@ class GoveeBluetoothLight(LightEntity):
         """Return true if light is on."""
         return self._state
 
-    #async def async_update(self) -> None:
-    #    """ Used to update the light's status/ """
-    #
-    #    # Connect to the device.
-    #    try:
-    #        client = await GoveeBLE.connect_to(self._ble_device, self.unique_id)
-    #        self._attr_available = False
-    #    except:
-    #        self._attr_available = True
-    #
-    #    # Update the power status.
-    #    self._state = await GoveeBLE.read_attribute(client, GoveeBLE.LEDCommand.POWER)
-    #
-    #    # Update the brightness status.
-    #    self._brightness = GoveeBLE.read_attribute(client, GoveeBLE.LEDCommand.BRIGHTNESS)
-    #
-    #    if self._use_percent:
-    #        self._brightness = int(self._brightness * 255 / 100)
-    #
-    #    # Update the color status.
-    #    self._rgb_color = await GoveeBLE.read_attribute(client, GoveeBLE.LEDCommand.COLOR)
-
     async def async_turn_on(self, **kwargs) -> None:
         if self._client is None:
             self._client = await GoveeBLE.connect_to(self._ble_device, self.unique_id)
 
-        # Initial command to turn on the light device.
-        await GoveeBLE.send_single_packet(self._client, GoveeBLE.LEDCommand.POWER, [0x1])
+        setting_effect = ATTR_EFFECT in kwargs
+
+        # Send power-on first, unless we're setting an effect (effect data should be loaded before activation)
+        if not setting_effect:
+            await GoveeBLE.send_single_packet(self._client, GoveeBLE.LEDCommand.POWER, [0x1])
         self._state = True
 
         if ATTR_BRIGHTNESS in kwargs:
@@ -306,30 +347,38 @@ class GoveeBluetoothLight(LightEntity):
                     [GoveeBLE.LEDMode.MANUAL, red, green, blue]) # Data
 
             self._rgb_color = (red, green, blue)
+            self._current_effect = EFFECT_OFF
 
         if ATTR_EFFECT in kwargs:
             effect = kwargs.get(ATTR_EFFECT)
-            if len(effect) > 0:
-                search = EFFECT_PARSE.search(effect)
-
-                # Parse effect indexes
-                categoryIndex = int(search.group(1))
-                sceneIndex = int(search.group(2))
-                lightEffectIndex = int(search.group(3))
-                specialEffectIndex = int(search.group(4))
-
-                category = json.loads(Path(Path(__file__).parent, "jsons", (self._model + ".json")).read_text())['data']['categories'][categoryIndex]
+            _LOGGER.debug("Effect requested: %r", effect)
+            _LOGGER.debug("Effect map loaded: %s, size: %d", self._effect_map is not None, len(self._effect_map) if self._effect_map else 0)
+            if not effect:
+                _LOGGER.warning("Effect name is empty, skipping")
+            elif not self._effect_map:
+                _LOGGER.warning("Effect map is not loaded yet, skipping effect %r", effect)
+            elif effect not in self._effect_map:
+                _LOGGER.warning("Effect %r not found in effect map. Available: %s", effect, list(self._effect_map.keys())[:5])
+            else:
+                categoryIndex, sceneIndex, lightEffectIndex, specialEffectIndex = self._effect_map[effect]
+                _LOGGER.debug("Effect %r maps to indexes: cat=%d scene=%d leffect=%d seffect=%d", effect, categoryIndex, sceneIndex, lightEffectIndex, specialEffectIndex)
+                category = self._model_data['data']['categories'][categoryIndex]
                 scene = category['scenes'][sceneIndex]
                 lightEffect = scene['lightEffects'][lightEffectIndex]
                 specialEffect = lightEffect['specialEffect'][specialEffectIndex]
-
-                # Create a client handle for contacting the device.
-                client = await GoveeBLE.connect_to(self._ble_device, self.unique_id)
+                _LOGGER.debug("Sending effect scenceParam length: %d", len(specialEffect.get('scenceParam', '')))
 
                 # Prepare packets to send big payload in separated chunks
-                await GoveeBLE.send_multi_packet(self._client, 0xa3,
-                    array.array('B', [0x02]),
-                    array.array('B', base64.b64decode(specialEffect['scenceParam'])))
+                try:
+                    await GoveeBLE.send_multi_packet(self._client, 0xa3,
+                        array.array('B', [0x02]),
+                        array.array('B', base64.b64decode(specialEffect['scenceParam'])))
+                    _LOGGER.debug("Effect %r sent successfully, sending power-on", effect)
+                    self._current_effect = effect
+                    # Power-on after effect data so the device activates with the effect already loaded
+                    await GoveeBLE.send_single_packet(self._client, GoveeBLE.LEDCommand.POWER, [0x1])
+                except Exception as err:
+                    _LOGGER.error("Failed to send effect %r: %s", effect, err)
 
     async def async_turn_off(self, **kwargs) -> None:
         if self._client is None:
@@ -337,21 +386,18 @@ class GoveeBluetoothLight(LightEntity):
 
         await GoveeBLE.send_single_packet(self._client, GoveeBLE.LEDCommand.POWER, [0x0])
         self._state = False
+        self._current_effect = EFFECT_OFF
 
-    #
-    #async def ensure_connection(self) -> None:
-    #    """
-    #    This method is used in the background to ensure the BLE device maintains connection.
-    #    Without it, the device may lose connection and cause errors when a state change is requested.
-    #    """
-
-    #    while True:
-    #        if self._client is None or self._client.is_connected:
-    #            time.sleep(1.0)
-    #            continue
-    #        else:
-    #            try:
-    #                self._client.connect()
-    #            except:
-    #                time.sleep(1.0)
-    #                continue
+    async def ensure_connection(self) -> None:
+        """
+        Background task to ensure the BLE device maintains connection.
+        Without it, the device may lose connection and cause errors when a state change is requested.
+        """
+        while True:
+            await asyncio.sleep(1.0)
+            if self._client is None or self._client.is_connected:
+                continue
+            try:
+                await self._client.connect()
+            except Exception:
+                pass
