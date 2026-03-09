@@ -6,12 +6,18 @@
         "title": "Seadista Govee tuled",
         "data": {
           "type": "Ühenduse tüüp"
+        },
+        "data_description": {
+          "type": "Vali 'API', et juhtida seadmeid Govee pilveteenuse kaudu (nõuab API võtit), või 'BLE', et juhtida seadmeid otse Bluetoothi kaudu."
         }
       },
       "api": {
         "title": "Govee API",
         "data": {
           "api_key": "API võti"
+        },
+        "data_description": {
+          "api_key": "Sinu Govee API võti. Hangi see Govee Home rakendusest: Profiil → Meist → Taotle API võtit."
         }
       },
       "ble": {
@@ -19,6 +25,10 @@
         "data": {
           "address": "Seade",
           "model": "Mudel"
+        },
+        "data_description": {
+          "address": "Läheduses avastatud Govee seadme Bluetoothi aadress.",
+          "model": "Sinu Govee seadme täpne mudelinumber (nt H617C). Vaata seadme või pakendi kleebiselt."
         }
       },
       "bluetooth_confirm": {
@@ -26,6 +36,9 @@
         "description": "Seadista {name}",
         "data": {
           "model": "Mudel"
+        },
+        "data_description": {
+          "model": "Sinu Govee seadme täpne mudelinumber (nt H617C). Vaata seadme või pakendi kleebiselt."
         }
       }
     },

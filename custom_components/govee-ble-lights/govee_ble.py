@@ -41,7 +41,7 @@ BLE_KEEPALIVE_INTERVAL: float = 5.0     # seconds between keepalive loop ticks
 #  0  = disconnect immediately after each command
 # -1  = keep connected forever (reconnect on drop)
 # >0  = disconnect after N idle seconds, reconnect on next command
-BLE_IDLE_DISCONNECT_TIMEOUT: int = 10
+BLE_IDLE_DISCONNECT_TIMEOUT: int = 0
 
 class GoveeBLE:
     """ This class is used to connect to and control Govee branded BLE LED lights. """

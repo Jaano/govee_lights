@@ -18,7 +18,10 @@ class GoveeAPI:
 
     async def list_devices(self):
         url = f"{self.base_url}/user/devices"
-        response = await asyncio.to_thread(requests.get, url, headers=self.headers)
+        response = await asyncio.to_thread(requests.get, url, headers=self.headers, timeout=GOVEE_API_TIMEOUT)
+        if response.status_code in (401, 403):
+            raise PermissionError(f"Govee API auth failed: {response.status_code}")
+        response.raise_for_status()
         return response.json()['data']
 
     async def list_scenes(self, sku: str, device: str):

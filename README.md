@@ -1,21 +1,13 @@
-# Ultimate BLE Lighting Control Integration for HomeAssistant
+# Ultimate Govee BLE Lights for Home Assistant
 ![Home Assistant](https://img.shields.io/badge/home%20assistant-%2341BDF5.svg?style=for-the-badge&logo=home-assistant&logoColor=white)
 [![hacs](https://img.shields.io/badge/HACS-Integration-blue.svg?style=for-the-badge)](https://github.com/hacs/integration)
 ![Python](https://img.shields.io/badge/python-3670A0?style=for-the-badge&logo=python&logoColor=ffdd54)
 <img src="assets/govee-logo.png" alt="Govee Logo" width="125">
 
-A powerful and seamless integration to control your Govee lighting devices via Govee API or BLE directly from HomeAssistant.
-This repository includes the source from the orignal BLE control reposityory, as well as patches from [cralex96](https://github.com/cralex96/govee_ble_lights) and [Rombond](https://github.com/Rombond/h617a_govee_ble_lights), credit to them for their work.
+Control Govee lighting devices via the Govee cloud API or directly over BLE from Home Assistant.
+Includes patches from [cralex96](https://github.com/cralex96/govee_ble_lights) and [Rombond](https://github.com/Rombond/h617a_govee_ble_lights).
 
-Here is a compatability table of different light models.
-
-| Model | Change Color | Change Brightness | On/Off |
-|-------|--------------|-------------------|--------|
-| H617A | ✅           | ✅                | ✅     |
-| H617C | ✅           | ✅                | ✅     |
-| more..| ✅           | ✅                | ✅     |
-
-Segmented lighting is currently not supported.
+Segmented lighting is not supported.
 
 ---
 
@@ -26,6 +18,7 @@ Segmented lighting is currently not supported.
 - [Configuration](#configuration)
 - [Usage](#usage)
 - [Scene Effects (BLE)](#scene-effects-ble)
+- [Removal](#removal)
 - [Support & Contribution](#support--contribution)
 - [License](#license)
 
@@ -33,47 +26,40 @@ Segmented lighting is currently not supported.
 
 ## Features
 
-- 🚀 **Direct BLE Control**: No need for middlewares or bridges. Connect and control your Govee devices directly through Bluetooth Low Energy.
-
-- ☁️ **API Control**: Supported all light devices with full features support including scenes!
-
-- 🌈 **Scene Selection**: Leverage the full potential of your Govee lights by choosing from all available scenes, transforming the ambiance of your room instantly.
-  
-- 💡 **Comprehensive Lighting Control**: Adjust brightness, change colors, or switch on/off with ease.
+- **Direct BLE Control**: Control Govee devices directly over Bluetooth without any bridge or middleware.
+- **API Control**: Full cloud API support, including scenes, for all supported devices.
+- **Scene Selection**: Choose from all available device scenes.
+- **Lighting Control**: Adjust brightness, color, and power state.
 
 ---
 
 ## Installation
 
-- 1: (Install HACS (Home assistant comunity repository))[https://hacs.xyz/docs/use/]
-- 2: Find the "Ultimate gove BLE lights control" plugin from the HACS side menu
-- 3: Enjoy.
+1. [Install HACS](https://hacs.xyz/docs/use/).
+2. Find **Ultimate Govee BLE Lights** in the HACS integrations list and install it.
+3. Restart Home Assistant.
 
 ## Configuration
 
-### What is needed
+**BLE:** Ensure Home Assistant has Bluetooth access on your host machine.
 
-For Direct BLE Control:
-- Before you begin, make certain HomeAssistant can access BLE on your platform. Ensure your HomeAssistant instance is granted permissions to utilize the Bluetooth Low Energy of your host machine.
-
-For Govee API Control:
-- Retrieve Govee-API-Key as described [here](https://developer.govee.com/reference/apply-you-govee-api-key), setup integration with API type ad fill your API key.
+**API:** Obtain an API key from the [Govee developer portal](https://developer.govee.com/reference/apply-you-govee-api-key), then set up the integration using the API connection type and enter the key.
 
 ## Usage
 
-With the integration setup, your Govee devices will appear as entities within HomeAssistant. All you need to do is select your device model when adding it.
+After setup, Govee devices appear as light entities in Home Assistant. Select the correct device model when adding a BLE device.
 
 ---
 
 ## Scene Effects (BLE)
 
-BLE scene effects are loaded from a JSON file bundled alongside the component at:
+BLE scene effects are loaded from a JSON file at:
 
 ```
 custom_components/govee-ble-lights/jsons/<MODEL>.json
 ```
 
-If no file is found for your model, the integration will automatically download scene data from the Govee API at startup and log a warning with the equivalent `curl` command you can use to save the file manually.
+If no file exists for your model, the integration downloads scene data from the Govee API at startup and logs the equivalent `curl` command so you can save the file manually.
 
 ### Downloading scene data manually
 
@@ -86,53 +72,42 @@ curl -s 'https://app2.govee.com/appsku/v1/light-effect-libraries?sku=H617C' \
   -o 'custom_components/govee-ble-lights/jsons/H617C.json'
 ```
 
-Saving the file avoids the runtime download on every restart and makes the scene list available immediately.
+Saving the file avoids a runtime download on every restart.
 
 ---
 
 ## Troubleshooting for BLE
 
-If you're facing issues with the integration, consider the following steps:
+1. **BLE range**: Make sure the Govee device is within Bluetooth range of the Home Assistant host or a configured [Bluetooth proxy](https://www.home-assistant.io/integrations/bluetooth/#remote-adapters-bluetooth-proxies).
+2. **Model selection**: Confirm the correct model was selected during setup.
+3. **Logs**: Check **Settings > System > Logs** for errors from the Govee integration.
 
-1. **Check BLE Connection**: 
-   
-   Ensure that the Govee device is within the Bluetooth range of your HomeAssistant host machine.
+---
 
-2. **Model Check**:
+## Removal
 
-   Check that you selected correct device model.
+**Via Home Assistant UI:**
 
-3. **Logs**:
+1. Go to **Settings > Devices & Services**.
+2. Find the integration entry and open it.
+3. Click the three-dot menu and select **Delete**.
 
-   HomeAssistant logs can provide insights into any issues. Navigate to `Configuration > Logs` to review any error messages related to the Govee integration.
+**Via HACS (removes component files):**
+
+1. Open HACS and go to **Integrations**.
+2. Find **Ultimate Govee BLE Lights**, open the three-dot menu, and select **Remove**.
+3. Restart Home Assistant.
 
 ---
 
 ## Support & Contribution
 
-- **Found an Issue?** 
-   
-   Raise it in the [Issues section](https://github.com/Jaano/govee_ble_lights/issues) of this repository.
-
-- **Device support**:
-
-   Almost every Govee device has its own BLE message protocol. If you find a model that doesn't work or has bugs, please report an issue here.
-
-- **Contributions**:
-
-   We welcome community contributions! If you'd like to improve the integration or add new features, please fork the repository and submit a pull request.
-
----
-
-## Future Plans
-
-We aim to continuously improve this integration by:
-
-- Supporting more Govee device models for BLE
-- Enhancing the overall user experience and stability
+- **Issues**: Report bugs or missing device support in the [issue tracker](https://github.com/Jaano/govee_ble_lights/issues).
+- **Contributions**: Fork the repository and submit a pull request.
 
 ---
 
 ## License
 
-This project is under the MIT License. For full license details, please refer to the [LICENSE file](https://github.com/Beshelmek/govee_ble_lights/blob/main/LICENSE) in this repository.
+MIT License. See the [LICENSE file](https://github.com/Jaano/govee_ble_lights/blob/main/LICENSE) for details.
+

@@ -3,11 +3,12 @@ from __future__ import annotations
 from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.const import (CONF_API_KEY, CONF_MODEL, MAJOR_VERSION, MINOR_VERSION)
 from homeassistant.helpers.storage import Store
 
 from .govee_api import GoveeAPI
+from .govee_ble import GoveeBLE
 
 from .const import DOMAIN
 import logging
@@ -32,7 +33,13 @@ async def internal_api_setup(hass: HomeAssistant, entry: ConfigEntry):
     api_key = entry.data.get(CONF_API_KEY)
     api = GoveeAPI(api_key)
 
-    devices = await api.list_devices()
+    try:
+        devices = await api.list_devices()
+    except PermissionError as err:
+        raise ConfigEntryAuthFailed("Invalid Govee API key") from err
+    except Exception as err:
+        raise ConfigEntryNotReady("Could not reach Govee API") from err
+
     _LOGGER.debug("Govee devices: %s", devices)
 
     store = Store(hass, 1, f"{DOMAIN}/{api_key}.json")
@@ -49,7 +56,7 @@ async def internal_cache_setup(
         devices = await store.async_load()
         if devices:
             _LOGGER.debug(f"{len(devices)} devices loaded from cache!")
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = Hub(api, devices=devices)
+    entry.runtime_data = Hub(api, devices=devices)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
 
@@ -74,7 +81,15 @@ async def async_setup_ble(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             f"Could not find Govee BLE device with address {address}"
         )
 
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = Hub(None, address=address)
+    try:
+        client = await GoveeBLE.connect_to(ble_device, address)
+        await client.disconnect()
+    except Exception as err:
+        raise ConfigEntryNotReady(
+            f"Could not connect to Govee BLE device {address}"
+        ) from err
+
+    entry.runtime_data = Hub(None, address=address)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
@@ -82,8 +97,6 @@ async def async_setup_ble(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Govee BLE device from a config entry."""
-    hass.data.setdefault(DOMAIN, {})
-
     if entry.data.get(CONF_API_KEY):
         await async_setup_api(hass, entry)
     if entry.data.get(CONF_MODEL):
@@ -94,17 +107,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
-    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    if unload_ok:
-        hass.data[DOMAIN].pop(entry.entry_id)
-
-    return unload_ok
+    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     if (MAJOR_VERSION, MINOR_VERSION) < (2025, 7):
         raise Exception("unsupported hass version, need at least 2025.7")
-
-    # init storage for registries
-    hass.data[DOMAIN] = {}
     return True

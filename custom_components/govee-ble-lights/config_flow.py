@@ -14,6 +14,7 @@ from homeassistant.const import (CONF_ADDRESS, CONF_MODEL, CONF_API_KEY, CONF_TY
 from homeassistant.data_entry_flow import FlowResult
 
 from .const import DOMAIN, CONF_TYPE_API, CONF_TYPE_BLE
+from .govee_ble import GoveeBLE
 from pathlib import Path
 
 class GoveeConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -27,6 +28,7 @@ class GoveeConfigFlow(ConfigFlow, domain=DOMAIN):
         self._discovery_info: None = None
         self._discovered_device: None = None
         self._discovered_devices: dict[str, str] = {}
+        self._discovered_service_infos: dict[str, BluetoothServiceInfoBleak] = {}
         self._available_models: list[str] = []
         self._available_config_types: dict[str, str] = {
             CONF_TYPE_API: 'API',
@@ -58,25 +60,29 @@ class GoveeConfigFlow(ConfigFlow, domain=DOMAIN):
         assert self._discovery_info is not None
         discovery_info = self._discovery_info
         title = discovery_info.name
+        # to-do: Infer light model based on BLE name.
+        placeholders = {"name": title, "model": "Device model"}
+        self.context["title_placeholders"] = placeholders
+        errors: dict[str, str] = {}
+
         if user_input is not None:
             model = user_input[CONF_MODEL]
-            return self.async_create_entry(title=title, data={
-                CONF_MODEL: model
-            })
+            try:
+                client = await GoveeBLE.connect_to(discovery_info.device, title)
+                await client.disconnect()
+            except Exception:
+                errors["base"] = "cannot_connect"
+            else:
+                return self.async_create_entry(title=title, data={CONF_MODEL: model})
 
         self._set_confirm_only()
-        placeholders = {
-            "name": title,
-            "model": "Device model"
-        }
-        # to-do: Infer light model based on BLE name.
-        self.context["title_placeholders"] = placeholders
         return self.async_show_form(
             step_id="bluetooth_confirm",
             description_placeholders=placeholders,
             data_schema=vol.Schema({
                 vol.Required(CONF_MODEL): vol.In(self._available_models)
             }),
+            errors=errors,
         )
 
     async def async_step_api(
@@ -111,7 +117,8 @@ class GoveeConfigFlow(ConfigFlow, domain=DOMAIN):
             address = discovery_info.address
             if address in current_addresses or address in self._discovered_devices:
                 continue
-            self._discovered_devices[address] = (discovery_info.name)
+            self._discovered_devices[address] = discovery_info.name
+            self._discovered_service_infos[address] = discovery_info
 
         if (user_input is not None and CONF_ADDRESS in user_input and user_input[CONF_ADDRESS] is not None
                 and CONF_MODEL in user_input and user_input[CONF_MODEL] is not None):
@@ -119,11 +126,17 @@ class GoveeConfigFlow(ConfigFlow, domain=DOMAIN):
             model = user_input[CONF_MODEL]
             await self.async_set_unique_id(address, raise_on_progress=False)
             self._abort_if_unique_id_configured()
-            return self.async_create_entry(
-                title=self._discovered_devices[address], data={
-                    CONF_MODEL: model
-                }
-            )
+            disc = self._discovered_service_infos.get(address)
+            if disc is not None:
+                try:
+                    client = await GoveeBLE.connect_to(disc.device, disc.name)
+                    await client.disconnect()
+                except Exception:
+                    errors["base"] = "cannot_connect"
+            if not errors:
+                return self.async_create_entry(
+                    title=self._discovered_devices[address], data={CONF_MODEL: model}
+                )
 
         return self.async_show_form(
             step_id="ble",

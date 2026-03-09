@@ -6,6 +6,7 @@ It only contains the basic methods, and uses govee_ble to talk to govee devices.
 from __future__ import annotations
 
 from pathlib import Path
+from datetime import timedelta
 import logging
 import asyncio
 import base64
@@ -43,11 +44,11 @@ from . import Hub
 
 _LOGGER = logging.getLogger(__name__)
 
+# Polling interval for GoveeAPILight (cloud API entities)
+SCAN_INTERVAL = timedelta(minutes=5)
+
 async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, async_add_entities):
-    if config_entry.entry_id in hass.data[DOMAIN]:
-        hub: Hub = hass.data[DOMAIN][config_entry.entry_id]
-    else:
-        return
+    hub: Hub = config_entry.runtime_data
 
     if hub.devices is not None:
         devices = hub.devices
@@ -61,6 +62,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
 
 class GoveeAPILight(LightEntity, dict):
     _attr_color_mode = ColorMode.RGB
+    _attr_has_entity_name = True
 
     def __init__(self, hub: Hub, device: dict) -> None:
         """Initialize an API light."""
@@ -109,25 +111,34 @@ class GoveeAPILight(LightEntity, dict):
         self._state = None
         self._brightness = None
         self._rgb_color = None
+        self._attr_available = True
 
     async def async_update(self):
         """Retrieve latest state."""
         _LOGGER.info("Updating device: %s", self.device_data)
 
-        state = await self.hub.api.get_device_state(self.sku, self.device)
-        for cap in state["capabilities"]:
-            if cap['instance'] == 'powerSwitch':
-                self._state = cap['state']['value'] == 1
-            if cap['instance'] == 'brightness':
-                self._brightness = cap['state']['value']
-            if cap['instance'] == 'colorTemperatureK':
-                value = cap['state']['value']
-                if value != 0:
-                    self._attr_color_temp_kelvin = value
-                    self._attr_color_temp = color_util.color_temperature_kelvin_to_mired(value)
-            if cap['instance'] == 'colorRgb':
-                num = cap['state']['value']
-                self._attr_rgb_color = ((num >> 16) & 0xFF, (num >> 8) & 0xFF, num & 0xFF)
+        try:
+            state = await self.hub.api.get_device_state(self.sku, self.device)
+            for cap in state["capabilities"]:
+                if cap['instance'] == 'powerSwitch':
+                    self._state = cap['state']['value'] == 1
+                if cap['instance'] == 'brightness':
+                    self._brightness = cap['state']['value']
+                if cap['instance'] == 'colorTemperatureK':
+                    value = cap['state']['value']
+                    if value != 0:
+                        self._attr_color_temp_kelvin = value
+                        self._attr_color_temp = color_util.color_temperature_kelvin_to_mired(value)
+                if cap['instance'] == 'colorRgb':
+                    num = cap['state']['value']
+                    self._attr_rgb_color = ((num >> 16) & 0xFF, (num >> 8) & 0xFF, num & 0xFF)
+            if not self._attr_available:
+                _LOGGER.info("Device %s is available again", self.device)
+                self._attr_available = True
+        except Exception as err:
+            if self._attr_available:
+                _LOGGER.warning("Device %s is unavailable: %s", self.device, err)
+                self._attr_available = False
 
     async def async_added_to_hass(self) -> None:
         """Load scenes once the entity is added and self.hass is available."""
@@ -221,6 +232,7 @@ class GoveeBluetoothLight(LightEntity, RestoreEntity):
         self._scenes_data: list[dict] | None = None
         self._idle_timeout: int = BLE_IDLE_DISCONNECT_TIMEOUT
         self._last_command_time: float = 0.0
+        self._attr_available = False
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, self._mac)},
             name=self._model,
@@ -405,10 +417,12 @@ class GoveeBluetoothLight(LightEntity, RestoreEntity):
                 reverse = {v: k for k, v in GoveeBLE.MUSIC_MODES.items()}
                 self._current_effect = reverse.get(state['music_mode_id'])
 
+            self._attr_available = True
             self.async_write_ha_state()
             await self._post_command()
         except Exception as err:
             _LOGGER.error("Failed to query initial state for %s: %s", self._mac, err)
+            self.async_write_ha_state()
 
         self.hass.async_create_background_task(
             self.ensure_connection(), f"govee_ble_keepalive_{self._mac}"
@@ -587,7 +601,14 @@ class GoveeBluetoothLight(LightEntity, RestoreEntity):
                 if state['mode'] == GoveeBLE.LEDMode.MUSIC and state.get('music_mode_id') is not None:
                     reverse = {v: k for k, v in GoveeBLE.MUSIC_MODES.items()}
                     self._current_effect = reverse.get(state['music_mode_id'])
+                if not self._attr_available:
+                    _LOGGER.info("BLE device %s is available again", self._mac)
+                    self._attr_available = True
                 self.async_write_ha_state()
             except Exception as err:
                 _LOGGER.debug("Keepalive reconnect failed for %s: %s", self._mac, err)
                 self._client = None
+                if self._attr_available:
+                    _LOGGER.warning("BLE device %s is unavailable: %s", self._mac, err)
+                    self._attr_available = False
+                    self.async_write_ha_state()
