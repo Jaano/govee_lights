@@ -25,6 +25,7 @@ Segmented lighting is currently not supported.
 - [Installation](#installation)
 - [Configuration](#configuration)
 - [Usage](#usage)
+- [Scene Effects (BLE)](#scene-effects-ble)
 - [Support & Contribution](#support--contribution)
 - [License](#license)
 
@@ -61,6 +62,31 @@ For Govee API Control:
 ## Usage
 
 With the integration setup, your Govee devices will appear as entities within HomeAssistant. All you need to do is select your device model when adding it.
+
+---
+
+## Scene Effects (BLE)
+
+BLE scene effects are loaded from a JSON file bundled alongside the component at:
+
+```
+custom_components/govee-ble-lights/jsons/<MODEL>.json
+```
+
+If no file is found for your model, the integration will automatically download scene data from the Govee API at startup and log a warning with the equivalent `curl` command you can use to save the file manually.
+
+### Downloading scene data manually
+
+Replace `H617C` with your model SKU:
+
+```bash
+curl -s 'https://app2.govee.com/appsku/v1/light-effect-libraries?sku=H617C' \
+  -H 'AppVersion: 5.6.01' \
+  -H 'User-Agent: GoveeHome/5.6.01 (com.ihoment.GoVeeSensor; build:2; iOS 16.5.0) Alamofire/5.6.4' \
+  -o 'custom_components/govee-ble-lights/jsons/H617C.json'
+```
+
+Saving the file avoids the runtime download on every restart and makes the scene list available immediately.
 
 ---
 

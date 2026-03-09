@@ -1,0 +1,42 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "user": {
+        "title": "Seadista Govee tuled",
+        "data": {
+          "type": "Ühenduse tüüp"
+        }
+      },
+      "api": {
+        "title": "Govee API",
+        "data": {
+          "api_key": "API võti"
+        }
+      },
+      "ble": {
+        "title": "Govee BLE",
+        "data": {
+          "address": "Seade",
+          "model": "Mudel"
+        }
+      },
+      "bluetooth_confirm": {
+        "title": "Kinnita Govee BLE seade",
+        "description": "Seadista {name}",
+        "data": {
+          "model": "Mudel"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Ühendamine ebaõnnestus",
+      "invalid_auth": "Vale autentimine",
+      "unknown": "Ootamatu viga"
+    },
+    "abort": {
+      "already_configured": "Seade on juba seadistatud",
+      "no_devices_found": "Võrgust ei leitud ühtegi seadet"
+    }
+  }
+}

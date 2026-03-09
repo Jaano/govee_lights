@@ -1,0 +1,42 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "user": {
+        "title": "Set up Govee Lights",
+        "data": {
+          "type": "Connection type"
+        }
+      },
+      "api": {
+        "title": "Govee API",
+        "data": {
+          "api_key": "API key"
+        }
+      },
+      "ble": {
+        "title": "Govee BLE",
+        "data": {
+          "address": "Device",
+          "model": "Model"
+        }
+      },
+      "bluetooth_confirm": {
+        "title": "Confirm Govee BLE device",
+        "description": "Set up {name}",
+        "data": {
+          "model": "Model"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect",
+      "invalid_auth": "Invalid authentication",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "already_configured": "Device is already configured",
+      "no_devices_found": "No devices found on the network"
+    }
+  }
+}

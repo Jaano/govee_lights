@@ -3,6 +3,9 @@ import asyncio
 
 import uuid
 
+# Govee cloud API
+GOVEE_API_TIMEOUT: int = 10  # seconds for HTTP requests
+
 
 class GoveeAPI:
     def __init__(self, api_key):

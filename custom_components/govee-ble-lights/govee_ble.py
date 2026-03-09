@@ -13,6 +13,36 @@ import bleak_retry_connector as brc
 
 _LOGGER = logging.getLogger(__name__)
 
+# BLE GATT characteristic UUIDs
+BLE_UUID_CONTROL_CHARACTERISTIC: str = '00010203-0405-0607-0809-0a0b0c0d2b11'
+BLE_UUID_NOTIFY_CHARACTERISTIC: str  = '00010203-0405-0607-0809-0a0b0c0d2b12'
+
+# Device model feature flags
+BLE_SEGMENTED_MODELS: list[str] = ['H6053', 'H6072', 'H6102', 'H6199', 'H617A', 'H617C']
+BLE_PERCENT_MODELS: list[str] = ['H617A', 'H617C']
+
+# Music sub-mode IDs (byte after the 0x13 color mode byte)
+BLE_MUSIC_MODES: dict[str, int] = {
+    "Music mode - Energic": 0x05,
+    "Music mode - Rhythm": 0x03,
+    "Music mode - Spectrum": 0x04,
+    "Music mode - Rolling": 0x06,
+}
+
+# BLE communication tuning
+BLE_QUERY_RESPONSE_TIMEOUT: float = 3.0  # seconds to wait for a state-query notification
+BLE_INTER_FRAME_DELAY: float = 0.05      # seconds between consecutive BLE frames
+BLE_CONNECT_ATTEMPTS: int = 3            # max connection attempts before raising
+
+# Keepalive / idle management
+BLE_KEEPALIVE_INTERVAL: float = 5.0     # seconds between keepalive loop ticks
+
+# How long (seconds) to keep the BLE connection open after the last communication.
+#  0  = disconnect immediately after each command
+# -1  = keep connected forever (reconnect on drop)
+# >0  = disconnect after N idle seconds, reconnect on next command
+BLE_IDLE_DISCONNECT_TIMEOUT: int = 10
+
 class GoveeBLE:
     """ This class is used to connect to and control Govee branded BLE LED lights. """
 
@@ -27,14 +57,15 @@ class GoveeBLE:
         The mode in which a color change happens in. Only manual is supported.
         """
         MANUAL = 0x02
-        MICROPHONE = 0x06
+        MUSIC = 0x13
         SCENES = 0x05
         SEGMENTS = 0x15
 
-    UUID_CONTROL_CHARACTERISTIC = '00010203-0405-0607-0809-0a0b0c0d2b11'
-    UUID_NOTIFY_CHARACTERISTIC  = '00010203-0405-0607-0809-0a0b0c0d2b12'
-    SEGMENTED_MODELS = ['H6053', 'H6072', 'H6102', 'H6199', 'H617A', 'H617C']
-    PERCENT_MODELS = ['H617A', 'H617C']
+    MUSIC_MODES: dict[str, int] = BLE_MUSIC_MODES
+    UUID_CONTROL_CHARACTERISTIC: str = BLE_UUID_CONTROL_CHARACTERISTIC
+    UUID_NOTIFY_CHARACTERISTIC: str  = BLE_UUID_NOTIFY_CHARACTERISTIC
+    SEGMENTED_MODELS: list[str] = BLE_SEGMENTED_MODELS
+    PERCENT_MODELS: list[str] = BLE_PERCENT_MODELS
 
     @staticmethod
     async def query_state(client: BleakClient) -> dict:
@@ -49,7 +80,7 @@ class GoveeBLE:
             GoveeBLE.LEDCommand.BRIGHTNESS,
             GoveeBLE.LEDCommand.COLOR,
         ]
-        state: dict[str, Any] = {'power': None, 'brightness': None, 'rgb': None, 'mode': None}
+        state: dict[str, Any] = {'power': None, 'brightness': None, 'rgb': None, 'mode': None, 'music_mode_id': None}
         events = {cmd: asyncio.Event() for cmd in COMMANDS}
 
         def notification_handler(sender, data: bytearray) -> None:
@@ -67,12 +98,24 @@ class GoveeBLE:
                 events[GoveeBLE.LEDCommand.BRIGHTNESS].set()
             elif cmd == GoveeBLE.LEDCommand.COLOR:
                 state['mode'] = data[2]
-                if len(data) >= 6:
+                if state['mode'] == GoveeBLE.LEDMode.MUSIC and len(data) >= 4:
+                    state['music_mode_id'] = data[3]
+                    _LOGGER.debug("Music mode id: 0x%02x", state['music_mode_id'])
+                elif len(data) >= 6:
                     state['rgb'] = (data[3], data[4], data[5])
                 _LOGGER.debug("Mode: 0x%02x, RGB: %s", state['mode'], state['rgb'])
                 events[GoveeBLE.LEDCommand.COLOR].set()
 
         try:
+            # Some devices do not expose the notify characteristic at all.
+            # Check before subscribing so we return cleanly instead of logging an error.
+            if client.services.get_characteristic(GoveeBLE.UUID_NOTIFY_CHARACTERISTIC) is None:
+                _LOGGER.warning(
+                    "Notify characteristic %s not found on device; skipping state query",
+                    GoveeBLE.UUID_NOTIFY_CHARACTERISTIC,
+                )
+                return state
+
             await client.start_notify(GoveeBLE.UUID_NOTIFY_CHARACTERISTIC, notification_handler)
 
             for cmd in COMMANDS:
@@ -81,7 +124,7 @@ class GoveeBLE:
                 _LOGGER.debug("Sending state query 0x%02x: %s", cmd, frame.hex())
                 await client.write_gatt_char(GoveeBLE.UUID_CONTROL_CHARACTERISTIC, frame, False)
                 try:
-                    await asyncio.wait_for(events[cmd].wait(), timeout=3.0)
+                    await asyncio.wait_for(events[cmd].wait(), timeout=BLE_QUERY_RESPONSE_TIMEOUT)
                 except asyncio.TimeoutError:
                     _LOGGER.warning("Timeout waiting for response to query 0x%02x", cmd)
 
@@ -161,7 +204,7 @@ class GoveeBLE:
         for i, r in enumerate(result):
             _LOGGER.debug("Sending multi-packet frame %d/%d: %s", i + 1, len(result), r.tobytes().hex())
             await GoveeBLE.send_single_frame(client, r)
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(BLE_INTER_FRAME_DELAY)
 
     @staticmethod
     async def send_single_packet(client: BleakClient, cmd, payload):
@@ -184,12 +227,6 @@ class GoveeBLE:
         frame = bytes([0x33, cmd]) + bytes(payload)
         # pad frame data to 19 bytes (plus checksum)
         frame += bytes([0] * (19 - len(frame)))
-
-        # The checksum is calculated by XORing all data bytes
-        checksum = 0
-        for b in frame:
-            checksum ^= b
-
         frame += bytes([GoveeBLE.sign_payload(frame)])
 
         await GoveeBLE.send_single_frame(client, frame)
@@ -199,7 +236,7 @@ class GoveeBLE:
         """ Sends a pre-made BLE frame to the device. """
         retry = 0
         while not client.is_connected:
-            if retry >= 3:
+            if retry >= BLE_CONNECT_ATTEMPTS:
                 raise TimeoutError
             await client.connect()
             retry += 1
@@ -215,11 +252,29 @@ class GoveeBLE:
     @staticmethod
     async def connect_to(device, identifier) -> BleakClient:
         """" This method connects to and returns a handle for the target BLE device. """
-        for _ in range(3):
+        last_err: Exception | None = None
+        for _ in range(BLE_CONNECT_ATTEMPTS):
             try:
                 return await brc.establish_connection(BleakClient, device, identifier)
-            except Exception:
-                continue
+            except Exception as err:
+                last_err = err
+        raise RuntimeError(
+            f"Failed to connect to {identifier} after {BLE_CONNECT_ATTEMPTS} attempts"
+        ) from last_err
+
+    @staticmethod
+    def build_music_packet(mode_id: int, sensitivity: int = 100) -> bytes:
+        """
+        Build a 20-byte BLE packet to activate a music-reactive mode.
+        Packet: 0x33 0x05 0x13 <mode_id> <sensitivity> 0x00 ... <checksum>
+        sensitivity is clamped to 0-100.
+        """
+        sensitivity = max(0, min(100, sensitivity))
+        payload = [GoveeBLE.LEDMode.MUSIC, mode_id, sensitivity, 0x00]
+        frame = bytes([0x33, GoveeBLE.LEDCommand.COLOR] + payload)
+        frame += bytes(19 - len(frame))
+        frame += bytes([GoveeBLE.sign_payload(frame)])
+        return frame
 
     @staticmethod
     def sign_payload(data):
