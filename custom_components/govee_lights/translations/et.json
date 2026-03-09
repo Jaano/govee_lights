@@ -1,0 +1,59 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "user": {
+        "title": "Seadista Govee tuled",
+        "data": {
+          "type": "Ühenduse tüüp"
+        },
+        "data_description": {
+          "type": "BLE – Bluetoothi kaudu, LAN – kohaliku Wi-Fi kaudu."
+        }
+      },
+      "ble": {
+        "title": "Govee BLE",
+        "data": {
+          "address": "Seade",
+          "model": "Govee valguse mudel"
+        },
+        "data_description": {
+          "address": "Läheduses avastatud Govee seadme Bluetoothi aadress.",
+          "model": "Mudelinumber seadme kleebiselt, nt H617C või H6076B."
+        }
+      },
+      "lan": {
+        "title": "Govee LAN (Wi-Fi)",
+        "description": "Leiti {discovered} seade(t). Vali seade või sisesta IP ja mudel käsitsi.",
+        "data": {
+          "lan_device_key": "Avastatud seade",
+          "lan_ip": "IP-aadress (käsitsi)",
+          "lan_sku": "Govee valguse mudel"
+        },
+        "data_description": {
+          "lan_device_key": "Vali automaatselt avastatud seade.",
+          "lan_ip": "IP-aadress, kui seadet ei avastatud automaatselt.",
+          "lan_sku": "Mudelinumber seadme kleebiselt, nt H6199 või H6076B. Vajalik käsitsi lisamisel."
+        }
+      },
+      "bluetooth_confirm": {
+        "title": "Kinnita Govee BLE seade",
+        "description": "Seadista {name}",
+        "data": {
+          "model": "Govee valguse mudel"
+        },
+        "data_description": {
+          "model": "Mudelinumber seadme kleebiselt, nt H617C või H6076B."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Ühendamine ebaõnnestus",
+      "unknown": "Ootamatu viga"
+    },
+    "abort": {
+      "already_configured": "Seade on juba seadistatud",
+      "no_devices_found": "Võrgust ei leitud ühtegi seadet"
+    }
+  }
+}

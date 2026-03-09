@@ -1,0 +1,59 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "user": {
+        "title": "Set up Govee Lights",
+        "data": {
+          "type": "Connection type"
+        },
+        "data_description": {
+          "type": "Choose 'BLE' for direct Bluetooth control, or 'LAN' for local Wi-Fi control."
+        }
+      },
+      "ble": {
+        "title": "Govee BLE",
+        "data": {
+          "address": "Device",
+          "model": "Govee Light Model"
+        },
+        "data_description": {
+          "address": "The Bluetooth address of the Govee device discovered nearby.",
+          "model": "Model number printed on the device label, e.g. H617C or H6076B."
+        }
+      },
+      "lan": {
+        "title": "Govee LAN (Wi-Fi)",
+        "description": "Found {discovered} device(s) on your local network. Select one, or enter an IP address and model manually.",
+        "data": {
+          "lan_device_key": "Discovered device",
+          "lan_ip": "IP address (manual)",
+          "lan_sku": "Govee Light Model"
+        },
+        "data_description": {
+          "lan_device_key": "Select a Govee device discovered on your local network via the LAN API.",
+          "lan_ip": "IP address of the Govee device (only needed if it was not auto-discovered).",
+          "lan_sku": "Model number printed on the device label, e.g. H6199 or H6076B. Required for manual IP entry."
+        }
+      },
+      "bluetooth_confirm": {
+        "title": "Confirm Govee BLE device",
+        "description": "Set up {name}",
+        "data": {
+          "model": "Govee Light Model"
+        },
+        "data_description": {
+          "model": "Model number printed on the device label, e.g. H617C or H6076B."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "already_configured": "Device is already configured",
+      "no_devices_found": "No devices found on the network"
+    }
+  }
+}

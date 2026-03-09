@@ -4,3 +4,5 @@ pythonenv*
 .coverage
 venv
 .venv
+README.md
+custom_components/govee_lights/jsons/*

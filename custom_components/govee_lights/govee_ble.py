@@ -1,5 +1,5 @@
 """
-This file contains all functionality pertaining to Govee BLE lights, including data structures.
+This file contains all functionality pertaining to Govee BLE control, including data structures.
 """
 
 from enum import IntEnum
