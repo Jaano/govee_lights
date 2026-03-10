@@ -2,11 +2,11 @@
 name = "govee-lights"
 version = "0.3.1"
 description = "Home Assistant custom integration for Govee BLE/LAN LED lights"
-requires-python = ">=3.12"
+requires-python = ">=3.14"
 license = "MIT"
 
 [tool.ruff]
-target-version = "py312"
+target-version = "py314"
 line-length = 100
 
 [tool.ruff.lint]

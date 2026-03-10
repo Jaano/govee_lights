@@ -1,619 +1,149 @@
 """
-Govee BLE low-level packet helpers and DataUpdateCoordinator.
+Govee generic helpers.
 
-GoveeBLE  – static helper class: packet building, checksum, legacy send helpers.
-GoveeBLECoordinator – manages a single BleakClient with keepalive, auto-reconnect,
-                       idle-disconnect and pushes device-state updates to listeners.
+GoveeHelper - scene download, parsing, and effect list building.
 """
 
 from __future__ import annotations
 
-import array
-import asyncio
+import base64
+import json
 import logging
-import time
-from datetime import datetime
-from enum import IntEnum
-from typing import Any
+from pathlib import Path
+from typing import Any, cast
 
-from bleak import BleakClient, BleakError
-import bleak_retry_connector as brc
-
-from homeassistant.components import bluetooth
-from homeassistant.const import EVENT_HOMEASSISTANT_STOP
-from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
-from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers.event import async_call_later
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
-
-from .const import DOMAIN
+import requests
 
 _LOGGER = logging.getLogger(__name__)
 
-# ── BLE GATT UUIDs ─────────────────────────────────────────────────────────
-BLE_UUID_CONTROL_CHARACTERISTIC: str = "00010203-0405-0607-0809-0a0b0c0d2b11"
-BLE_UUID_NOTIFY_CHARACTERISTIC: str = "00010203-0405-0607-0809-0a0b0c0d2b12"
-
-# ── Model feature flags ─────────────────────────────────────────────────────
-BLE_SEGMENTED_MODELS: list[str] = ["H6053", "H6072", "H6102", "H6199", "H617A", "H617C"]
-BLE_PERCENT_MODELS: list[str] = ["H617A", "H617C"]
-
-# ── Music sub-mode IDs ──────────────────────────────────────────────────────
-BLE_MUSIC_MODES: dict[str, int] = {
-    "Music mode - Energic": 0x05,
-    "Music mode - Rhythm": 0x03,
-    "Music mode - Spectrum": 0x04,
-    "Music mode - Rolling": 0x06,
-}
-
-# ── Timing constants ────────────────────────────────────────────────────────
-BLE_QUERY_RESPONSE_TIMEOUT: float = 3.0  # seconds to wait for a state-query notification
-BLE_INTER_FRAME_DELAY: float = 0.05  # seconds between consecutive BLE frames
-BLE_CONNECT_ATTEMPTS: int = 3  # max connection attempts before raising
-BLE_KEEPALIVE_INTERVAL: float = 5.0  # seconds between keepalive loop ticks
-
-# How long (seconds) to keep the BLE connection open after the last communication.
-#  0  = disconnect immediately after each command
-# -1  = keep connected forever (reconnect on drop)
-# >0  = disconnect after N idle seconds, reconnect on next command
-BLE_IDLE_DISCONNECT_TIMEOUT: int = 0
-
-# Coordinator internals
-_DISCONNECT_DELAY_SECONDS: int = 120
-_STATE_QUERY_EVERY_N_TICKS: int = 3
-_RETRY_BACKOFF_SECONDS: float = 2.0
-_DEVICE_DISCOVERY_RETRIES: int = 4
+_GOVEE_SCENE_DOWNLOAD_TIMEOUT: int = 10  # seconds for scene data HTTP requests
 
 
-# ╔══════════════════════════════════════════════════════════════════════════╗
-# ║  GoveeBLE – low-level static helpers                                     ║
-# ╚══════════════════════════════════════════════════════════════════════════╝
-
-
-class GoveeBLE:
-    """Static helper class for Govee BLE packet construction and low-level I/O."""
-
-    class LEDCommand(IntEnum):
-        POWER = 0x01
-        BRIGHTNESS = 0x04
-        COLOR = 0x05
-
-    class LEDMode(IntEnum):
-        MANUAL = 0x02
-        MUSIC = 0x13
-        SCENES = 0x05
-        SEGMENTS = 0x15
-
-    MUSIC_MODES: dict[str, int] = BLE_MUSIC_MODES
-    UUID_CONTROL_CHARACTERISTIC: str = BLE_UUID_CONTROL_CHARACTERISTIC
-    UUID_NOTIFY_CHARACTERISTIC: str = BLE_UUID_NOTIFY_CHARACTERISTIC
-    SEGMENTED_MODELS: list[str] = BLE_SEGMENTED_MODELS
-    PERCENT_MODELS: list[str] = BLE_PERCENT_MODELS
+class GoveeHelper:
+    """Generic Govee helpers: scene download, parsing, and effect list building."""
 
     @staticmethod
-    def sign_payload(data) -> int:
-        """XOR checksum over all bytes."""
-        checksum = 0
-        for b in data:
-            checksum ^= b
-        return checksum & 0xFF
+    def build_ptreal_cmds(scene_code: int, scence_param: str) -> list[str]:
+        """Encode a scene into pre-built BLE/ptReal packet frames (base64-encoded 20-byte packets).
+        Mirrors SetSceneCode::encode from govee2mqtt/src/ble.rs."""
+        payload = base64.b64decode(scence_param)
+        raw = bytearray([0xa3, 0x00, 0x01, 0x00, 0x02])  # header; byte[3] patched below
+        num_lines = 0
+        last_line_marker = 1
+        for b in payload:
+            if len(raw) % 19 == 0:
+                num_lines += 1
+                raw.append(0xa3)
+                last_line_marker = len(raw)
+                raw.append(num_lines)
+            raw.append(b)
+        raw[last_line_marker] = 0xFF    # mark last data line
+        raw[3] = num_lines + 1          # total frame count
+        packets: list[bytes] = []
+        for i in range(0, len(raw), 19):
+            chunk = bytes(raw[i: i + 19])
+            padded = chunk + bytes(19 - len(chunk))
+            xor = 0
+            for byte in padded:
+                xor ^= byte
+            packets.append(padded + bytes([xor]))
+        lo = scene_code & 0xFF
+        hi = (scene_code >> 8) & 0xFF
+        code_pkt = bytes([0x33, 0x05, 0x04, lo, hi]) + bytes(14)
+        xor = 0
+        for byte in code_pkt:
+            xor ^= byte
+        packets.append(code_pkt + bytes([xor]))
+        return [base64.b64encode(p).decode() for p in packets]
 
     @staticmethod
-    def build_single_packet(cmd: int, payload) -> bytes:
-        """Build (but do not send) a signed 20-byte command packet."""
-        if not isinstance(cmd, int):
-            raise ValueError("Invalid command")
-        if not isinstance(payload, (bytes, list)) and not (
-            isinstance(payload, list) and all(isinstance(x, int) for x in payload)
-        ):
-            raise ValueError("Invalid payload")
-        if len(payload) > 17:
-            raise ValueError("Payload too long")
-        frame = bytes([0x33, cmd & 0xFF]) + bytes(payload)
-        frame += bytes([0] * (19 - len(frame)))
-        return frame + bytes([GoveeBLE.sign_payload(frame)])
-
-    @staticmethod
-    def build_music_packet(mode_id: int, sensitivity: int = 100) -> bytes:
-        """Build a packet that activates a music-reactive mode."""
-        sensitivity = max(0, min(100, sensitivity))
-        payload = [GoveeBLE.LEDMode.MUSIC, mode_id, sensitivity, 0x00]
-        frame = bytes([0x33, GoveeBLE.LEDCommand.COLOR] + payload)
-        frame += bytes(19 - len(frame))
-        return frame + bytes([GoveeBLE.sign_payload(frame)])
-
-    @staticmethod
-    async def send_single_packet(client: BleakClient, cmd, payload) -> None:
-        """Build, sign, and send a 20-byte command packet (legacy helper)."""
-        await GoveeBLE.send_single_frame(client, GoveeBLE.build_single_packet(cmd, payload))
-
-    @staticmethod
-    async def send_single_frame(client: BleakClient, frame) -> None:
-        """Write a pre-built 20-byte BLE frame (legacy helper)."""
-        retry = 0
-        while not client.is_connected:
-            if retry >= BLE_CONNECT_ATTEMPTS:
-                raise TimeoutError("Device not connected")
-            await client.connect()
-            retry += 1
-        _LOGGER.debug("Writing frame: %s", bytes(frame).hex())
-        await client.write_gatt_char(GoveeBLE.UUID_CONTROL_CHARACTERISTIC, frame, False)
-
-    @staticmethod
-    async def send_multi_packet(client: BleakClient, protocol_type, header_array, data) -> None:
-        """Send a segmented multi-packet burst (legacy helper)."""
-        result = []
-        header_length = len(header_array)
-        header_offset = header_length + 4
-
-        initial_buffer = array.array("B", [0] * 20)
-        initial_buffer[0] = protocol_type
-        initial_buffer[1] = 0
-        initial_buffer[2] = 1
-        initial_buffer[4 : 4 + header_length] = header_array
-
-        additional_buffer = array.array("B", [0] * 20)
-        additional_buffer[0] = protocol_type
-        additional_buffer[1] = 255
-
-        remaining_space = 14 - header_length + 1
-
-        if len(data) <= remaining_space:
-            initial_buffer[header_offset : header_offset + len(data)] = data
-        else:
-            excess = len(data) - remaining_space
-            chunks = excess // 17
-            remainder = excess % 17
-            if remainder > 0:
-                chunks += 1
-            else:
-                remainder = 17
-
-            initial_buffer[header_offset : header_offset + remaining_space] = data[
-                0:remaining_space
-            ]
-            current_index = remaining_space
-
-            for i in range(1, chunks + 1):
-                chunk = array.array("B", [0] * 17)
-                chunk_size = remainder if i == chunks else 17
-                chunk[0:chunk_size] = data[current_index : current_index + chunk_size]
-                current_index += chunk_size
-
-                if i == chunks:
-                    additional_buffer[2 : 2 + chunk_size] = chunk[0:chunk_size]
-                else:
-                    chunk_buffer = array.array("B", [0] * 20)
-                    chunk_buffer[0] = protocol_type
-                    chunk_buffer[1] = i
-                    chunk_buffer[2 : 2 + chunk_size] = chunk
-                    chunk_buffer[19] = GoveeBLE.sign_payload(chunk_buffer[0:19])
-                    result.append(chunk_buffer)
-
-        initial_buffer[3] = len(result) + 2
-        initial_buffer[19] = GoveeBLE.sign_payload(initial_buffer[0:19])
-        result.insert(0, initial_buffer)
-
-        additional_buffer[19] = GoveeBLE.sign_payload(additional_buffer[0:19])
-        result.append(additional_buffer)
-
-        for i, r in enumerate(result):
-            _LOGGER.debug("Multi-packet frame %d/%d: %s", i + 1, len(result), r.tobytes().hex())
-            await GoveeBLE.send_single_frame(client, r)
-            await asyncio.sleep(BLE_INTER_FRAME_DELAY)
-
-    @staticmethod
-    async def query_state(client: BleakClient) -> dict:
-        """
-        Query power, brightness, and color state from a connected device.
-        Sends 0xAA query packets and collects notification responses.
-        Returns a dict with keys: 'power', 'brightness', 'rgb', 'mode', 'music_mode_id'.
-        """
-        COMMANDS = [
-            GoveeBLE.LEDCommand.POWER,
-            GoveeBLE.LEDCommand.BRIGHTNESS,
-            GoveeBLE.LEDCommand.COLOR,
-        ]
-        state: dict[str, Any] = {
-            "power": None,
-            "brightness": None,
-            "rgb": None,
-            "mode": None,
-            "music_mode_id": None,
-        }
-        events = {cmd: asyncio.Event() for cmd in COMMANDS}
-
-        def notification_handler(sender, data: bytearray) -> None:
-            _LOGGER.debug("State notification: %s", data.hex())
-            if len(data) < 3 or data[0] != 0xAA:
-                return
-            cmd = data[1]
-            if cmd == GoveeBLE.LEDCommand.POWER:
-                state["power"] = data[2] == 0x01
-                events[GoveeBLE.LEDCommand.POWER].set()
-            elif cmd == GoveeBLE.LEDCommand.BRIGHTNESS:
-                state["brightness"] = data[2]
-                events[GoveeBLE.LEDCommand.BRIGHTNESS].set()
-            elif cmd == GoveeBLE.LEDCommand.COLOR:
-                state["mode"] = data[2]
-                if state["mode"] == GoveeBLE.LEDMode.MUSIC and len(data) >= 4:
-                    state["music_mode_id"] = data[3]
-                elif len(data) >= 6:
-                    state["rgb"] = (data[3], data[4], data[5])
-                events[GoveeBLE.LEDCommand.COLOR].set()
-
-        try:
-            if client.services.get_characteristic(GoveeBLE.UUID_NOTIFY_CHARACTERISTIC) is None:
-                _LOGGER.warning("Notify characteristic not found on device; skipping state query")
-                return state
-
-            await client.start_notify(GoveeBLE.UUID_NOTIFY_CHARACTERISTIC, notification_handler)
-
-            for cmd in COMMANDS:
-                frame = bytes([0xAA, cmd]) + bytes(17)
-                frame += bytes([GoveeBLE.sign_payload(frame)])
-                _LOGGER.debug("Sending state query 0x%02x: %s", cmd, frame.hex())
-                await client.write_gatt_char(GoveeBLE.UUID_CONTROL_CHARACTERISTIC, frame, False)
-                try:
-                    await asyncio.wait_for(events[cmd].wait(), timeout=BLE_QUERY_RESPONSE_TIMEOUT)
-                except asyncio.TimeoutError:
-                    _LOGGER.warning("Timeout waiting for response to query 0x%02x", cmd)
-        except Exception as err:
-            _LOGGER.error("Failed to query device state: %s", err)
-        finally:
-            try:
-                await client.stop_notify(GoveeBLE.UUID_NOTIFY_CHARACTERISTIC)
-            except Exception:
-                pass
-
-        return state
-
-    @staticmethod
-    async def connect_to(device, identifier: str) -> BleakClient:
-        """Connect to a BLE device with retry and return the BleakClient."""
-        last_err: Exception | None = None
-        for _ in range(BLE_CONNECT_ATTEMPTS):
-            try:
-                return await brc.establish_connection(BleakClient, device, identifier)
-            except Exception as err:
-                last_err = err
-        raise RuntimeError(
-            f"Failed to connect to {identifier} after {BLE_CONNECT_ATTEMPTS} attempts"
-        ) from last_err
-
-    @staticmethod
-    async def read_attribute(client: BleakClient, attribute):
-        """Read a GATT characteristic value."""
-        return await client.read_gatt_char(attribute)
-
-
-# ╔══════════════════════════════════════════════════════════════════════════╗
-# ║  GoveeBLECoordinator                                                     ║
-# ╚══════════════════════════════════════════════════════════════════════════╝
-
-
-class GoveeBLECoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """
-    Manages the BLE connection lifecycle for a single Govee device.
-
-    Connection modes (controlled by _idle_timeout):
-      0   — disconnect immediately after each command
-     -1   — keep alive forever; reconnect automatically on drop
-     >0   — disconnect after N idle seconds; reconnect on next command
-
-    State (is_on, brightness_raw, rgb_color, mode, music_mode_id) is updated
-    whenever BLE notifications arrive and pushed to all registered listeners via
-    DataUpdateCoordinator.async_set_updated_data().
-    """
-
-    def __init__(self, hass: HomeAssistant, address: str, model: str) -> None:
-        super().__init__(
-            hass,
-            _LOGGER,
-            name=f"Govee {model} ({address})",
-            update_interval=None,
-        )
-        self.address = address
-        self.model = model
-
-        self._client: BleakClient | None = None
-        self._lock = asyncio.Lock()
-        self._cancel_disconnect: CALLBACK_TYPE | None = None
-        self._keep_alive_task: asyncio.Task | None = None
-        self._keep_alive_ticks = 0
-        self._idle_timeout: int = BLE_IDLE_DISCONNECT_TIMEOUT
-        self._last_command_time: float = 0.0
-        self._available: bool = False
-
-        # Last-known device state (updated from BLE notifications)
-        self.is_on: bool = False
-        self.brightness_raw: int = 0  # 0-100 (% models) or 0-255 (other models)
-        self.rgb_color: tuple[int, int, int] | None = None
-        self.mode: int | None = None
-        self.music_mode_id: int | None = None
-
-        self._unsub_stop: CALLBACK_TYPE | None = hass.bus.async_listen_once(
-            EVENT_HOMEASSISTANT_STOP, self._handle_hass_stop
-        )
-
-    # ── Properties ───────────────────────────────────────────────────────────
-
-    @property
-    def available(self) -> bool:
-        return self._available
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        return DeviceInfo(
-            identifiers={(DOMAIN, self.address)},
-            name=self.model,
-            manufacturer="Govee",
-            model=self.model,
-        )
-
-    # ── HA lifecycle ─────────────────────────────────────────────────────────
-
-    @callback
-    def _handle_hass_stop(self, _event: Event) -> None:
-        self._stop_keep_alive()
-        if self._cancel_disconnect:
-            self._cancel_disconnect()
-            self._cancel_disconnect = None
-
-    async def _async_update_data(self) -> dict[str, Any]:
-        """Required by DataUpdateCoordinator; returns a snapshot of current state."""
-        return self._state_snapshot()
-
-    def _state_snapshot(self) -> dict[str, Any]:
-        return {
-            "is_on": self.is_on,
-            "brightness_raw": self.brightness_raw,
-            "rgb_color": self.rgb_color,
-            "mode": self.mode,
-            "music_mode_id": self.music_mode_id,
-        }
-
-    # ── Initial setup ─────────────────────────────────────────────────────────
-
-    async def async_setup(self) -> None:
-        """Connect to the device and query initial state. Safe to call from a background task."""
-        try:
-            await self._ensure_connected()
-            self._available = True
-            self.async_set_updated_data(self._state_snapshot())
-        except Exception as err:
-            _LOGGER.warning(
-                "Initial BLE connection failed for %s (%s): %s",
-                self.model,
-                self.address,
-                err,
-            )
-            self._available = False
-            self.async_set_updated_data(self._state_snapshot())
-
-    # ── Connection management ─────────────────────────────────────────────────
-
-    async def _ensure_connected(self) -> BleakClient:
-        """Return a live BleakClient, establishing a new connection if required."""
-        if self._client and self._client.is_connected:
-            self._arm_disconnect_timer()
-            return self._client
-
-        ble_device = None
-        for attempt in range(_DEVICE_DISCOVERY_RETRIES):
-            ble_device = bluetooth.async_ble_device_from_address(
-                self.hass, self.address.upper(), connectable=True
-            )
-            if ble_device is not None:
-                break
-            if attempt < _DEVICE_DISCOVERY_RETRIES - 1:
-                await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
-
-        if ble_device is None:
-            raise BleakError(
-                f"Device {self.address} not found after {_DEVICE_DISCOVERY_RETRIES} attempts"
-            )
-
-        self._client = await brc.establish_connection(BleakClient, ble_device, self.address)
-        _LOGGER.debug("Connected to %s (%s)", self.model, self.address)
-        self._arm_disconnect_timer()
-        await self._subscribe_notifications()
-        await self._run_state_query()
-        return self._client
-
-    def _arm_disconnect_timer(self) -> None:
-        """(Re)schedule an auto-disconnect based on _idle_timeout."""
-        if self._cancel_disconnect:
-            self._cancel_disconnect()
-            self._cancel_disconnect = None
-
-        # 0 = immediate (handled per-command); -1 = keep alive (no timer)
-        if self._idle_timeout <= 0:
-            return
-
-        @callback
-        def _on_timeout(_now: datetime) -> None:
-            self.hass.async_create_task(self.disconnect())
-
-        self._cancel_disconnect = async_call_later(self.hass, self._idle_timeout, _on_timeout)
-
-    # ── BLE notifications ─────────────────────────────────────────────────────
-
-    async def _subscribe_notifications(self) -> None:
-        if not self._client or not self._client.is_connected:
-            return
-        if self._client.services.get_characteristic(GoveeBLE.UUID_NOTIFY_CHARACTERISTIC) is None:
-            _LOGGER.debug("Notify characteristic not found on %s, skipping", self.address)
-            return
-        try:
-            await self._client.start_notify(
-                GoveeBLE.UUID_NOTIFY_CHARACTERISTIC, self._notification_handler
-            )
-            self._start_keep_alive()
-        except BleakError as err:
-            _LOGGER.debug("Failed to subscribe to notifications for %s: %s", self.address, err)
-
-    def _notification_handler(self, _sender: Any, data: bytearray) -> None:
-        if len(data) < 3 or data[0] != 0xAA:
-            return
-        cmd, payload = data[1], data[2:]
-        _LOGGER.debug("Notification %s cmd=0x%02x: %s", self.address, cmd, data.hex())
-        changed = False
-        if cmd == GoveeBLE.LEDCommand.POWER:
-            self.is_on = payload[0] == 0x01
-            changed = True
-        elif cmd == GoveeBLE.LEDCommand.BRIGHTNESS:
-            self.brightness_raw = payload[0]
-            changed = True
-        elif cmd == GoveeBLE.LEDCommand.COLOR:
-            self.mode = payload[0]
-            if self.mode == GoveeBLE.LEDMode.MUSIC and len(payload) >= 2:
-                self.music_mode_id = payload[1]
-            elif len(payload) >= 4:
-                self.rgb_color = (payload[1], payload[2], payload[3])
-            changed = True
-
-        if changed:
-            if not self._available:
-                self._available = True
-            self.async_set_updated_data(self._state_snapshot())
-
-    # ── State query ───────────────────────────────────────────────────────────
-
-    async def _run_state_query(self) -> None:
-        """Send 0xAA query packets for power, brightness, and color mode."""
-        if not self._client or not self._client.is_connected:
-            return
-        for cmd in (
-            GoveeBLE.LEDCommand.POWER,
-            GoveeBLE.LEDCommand.BRIGHTNESS,
-            GoveeBLE.LEDCommand.COLOR,
-        ):
-            frame = bytes([0xAA, cmd]) + bytes(17)
-            frame += bytes([GoveeBLE.sign_payload(frame)])
-            try:
-                await self._client.write_gatt_char(
-                    GoveeBLE.UUID_CONTROL_CHARACTERISTIC, frame, False
-                )
-                await asyncio.sleep(BLE_INTER_FRAME_DELAY)
-            except BleakError as err:
-                _LOGGER.debug("State query 0x%02x failed for %s: %s", cmd, self.address, err)
-
-    # ── Keepalive loop ────────────────────────────────────────────────────────
-
-    def _start_keep_alive(self) -> None:
-        self._stop_keep_alive()
-        self._keep_alive_ticks = 0
-        self._keep_alive_task = self.hass.async_create_background_task(
-            self._keep_alive_loop(), f"govee_keepalive_{self.address}"
-        )
-
-    def _stop_keep_alive(self) -> None:
-        if self._keep_alive_task and not self._keep_alive_task.done():
-            self._keep_alive_task.cancel()
-        self._keep_alive_task = None
-
-    async def _keep_alive_loop(self) -> None:
-        try:
-            while True:
-                await asyncio.sleep(BLE_KEEPALIVE_INTERVAL)
-
-                if not self._client or not self._client.is_connected:
-                    _LOGGER.debug("BLE connection to %s dropped", self.address)
-                    if self._idle_timeout == -1:
-                        await self._attempt_reconnect()
-                    break
-
-                self._keep_alive_ticks += 1
-                full_query = self._keep_alive_ticks % _STATE_QUERY_EVERY_N_TICKS == 0
-
-                try:
-                    if full_query:
-                        await self._run_state_query()
-                    else:
-                        # Lightweight ping: re-query power state only
-                        ping = bytes([0xAA, GoveeBLE.LEDCommand.POWER]) + bytes(17)
-                        ping += bytes([GoveeBLE.sign_payload(ping)])
-                        await self._client.write_gatt_char(
-                            GoveeBLE.UUID_CONTROL_CHARACTERISTIC, ping, False
-                        )
-                except BleakError as err:
-                    _LOGGER.debug("Keepalive write failed for %s: %s", self.address, err)
-                    self._client = None
-                    if self._idle_timeout == -1:
-                        await self._attempt_reconnect()
-                    break
-        except asyncio.CancelledError:
-            pass
-
-    async def _attempt_reconnect(self) -> None:
-        """Try to reconnect in keep-alive mode; update availability accordingly."""
-        try:
-            await self._ensure_connected()
-            if not self._available:
-                _LOGGER.info("Govee %s (%s) is available again", self.model, self.address)
-                self._available = True
-                self.async_set_updated_data(self._state_snapshot())
-        except Exception as err:
-            _LOGGER.debug("Reconnect failed for %s: %s", self.address, err)
-            if self._available:
-                _LOGGER.warning("Govee %s (%s) is unavailable: %s", self.model, self.address, err)
-                self._available = False
-                self.async_set_updated_data(self._state_snapshot())
-
-    # ── Command dispatch ──────────────────────────────────────────────────────
-
-    async def send_command(self, packet: bytes) -> None:
-        """Send a single BLE packet, ensuring a live connection."""
-        async with self._lock:
-            await self._dispatch([packet])
-
-    async def send_commands(
-        self, packets: list[bytes], delay: float = BLE_INTER_FRAME_DELAY
-    ) -> None:
-        """Send multiple BLE packets with an inter-frame delay, under a single lock."""
-        async with self._lock:
-            await self._dispatch(packets, delay=delay)
-
-    async def _dispatch(self, packets: list[bytes], delay: float = 0.0) -> None:
-        """Internal: write packets to the device with retry on connection errors."""
-        self._last_command_time = time.monotonic()
-        for attempt in range(BLE_CONNECT_ATTEMPTS):
-            try:
-                client = await self._ensure_connected()
-                for i, pkt in enumerate(packets):
-                    await client.write_gatt_char(GoveeBLE.UUID_CONTROL_CHARACTERISTIC, pkt, False)
-                    if delay > 0 and i < len(packets) - 1:
-                        await asyncio.sleep(delay)
-                if self._idle_timeout == 0:
-                    await self._disconnect_client()
-                return
-            except BleakError as err:
-                self._client = None
-                if attempt == BLE_CONNECT_ATTEMPTS - 1:
-                    _LOGGER.error(
-                        "Failed to send to %s after %d attempts: %s",
-                        self.address,
-                        BLE_CONNECT_ATTEMPTS,
-                        err,
+    def parse_api_scene_response(model: str, data: dict[str, Any]) -> list[dict[str, Any]]:
+        """Parse a Govee API response into the flat scene list format,
+        selecting the model-specific specialEffect scenceParam where available."""
+        scenes: list[dict[str, Any]] = []
+        for cat in data["data"]["categories"]:
+            cat_name: str = cat["categoryName"]
+            for scene in cat["scenes"]:
+                for effect in scene["lightEffects"]:
+                    code: int = effect["sceneCode"]
+                    param: str = effect.get("scenceParam", "")
+                    for spe in effect.get("specialEffect", []):
+                        if model in spe.get("supportSku", []):
+                            param = spe["scenceParam"]
+                            break
+                    if not param:
+                        continue
+                    ptreal = (
+                        GoveeHelper.build_ptreal_cmds(code, param) if code != 0 else []
                     )
-                    raise
-                await asyncio.sleep(_RETRY_BACKOFF_SECONDS * (attempt + 1))
+                    scenes.append({
+                        "category": cat_name,
+                        "scene_name": scene["sceneName"],
+                        "scene_id": scene["sceneId"],
+                        "scene_code": code,
+                        "scence_param": param,
+                        "ptreal_cmds": ptreal,
+                    })
+        return scenes
 
-    # ── Disconnect ────────────────────────────────────────────────────────────
+    @staticmethod
+    def download_model_scenes(model: str, config_dir: str) -> list[dict[str, Any]]:
+        """Download scene data from Govee's public light-effect-library endpoint,
+        save it to {config_dir}/.storage/govee_lights/{model}.json, and return parsed scenes."""
+        url = f"https://app2.govee.com/appsku/v1/light-effect-libraries?sku={model}"
+        headers = {
+            "AppVersion": "5.6.01",
+            "User-Agent": (
+                "GoveeHome/5.6.01 (com.ihoment.GoVeeSensor; build:2; iOS 16.5.0) Alamofire/5.6.4"
+            ),
+        }
+        _LOGGER.info("Downloading scene data for %s from Govee API", model)
+        resp = requests.get(url, headers=headers, timeout=_GOVEE_SCENE_DOWNLOAD_TIMEOUT)
+        resp.raise_for_status()
+        store_dir = Path(config_dir) / ".storage" / "govee_lights"
+        store_dir.mkdir(parents=True, exist_ok=True)
+        json_path = store_dir / f"{model}.json"
+        json_path.write_text(resp.text)
+        _LOGGER.info("Saved scene data for %s to %s", model, json_path)
+        return GoveeHelper.parse_api_scene_response(model, resp.json())
 
-    async def disconnect(self) -> None:
-        """Gracefully disconnect from the device and cancel the keepalive loop."""
-        self._stop_keep_alive()
-        if self._cancel_disconnect:
-            self._cancel_disconnect()
-            self._cancel_disconnect = None
-        await self._disconnect_client()
+    @staticmethod
+    def load_model_scenes(model: str, config_dir: str) -> list[dict[str, Any]]:
+        """Load scenes from .storage/govee_lights/{model}.json, or download if not present."""
+        json_path = Path(config_dir) / ".storage" / "govee_lights" / f"{model}.json"
+        if json_path.exists():
+            data: Any = json.loads(json_path.read_text())
+            if isinstance(data, list):
+                _LOGGER.debug("Loaded flat scene data from %s", json_path)
+                return cast("list[dict[str, Any]]", data)
+            if isinstance(data, dict) and "data" in data:
+                _LOGGER.debug("Loaded raw API scene data from %s; parsing", json_path)
+                return GoveeHelper.parse_api_scene_response(model, cast("dict[str, Any]", data))
+            _LOGGER.debug("Unrecognised format in %s; downloading fresh data", json_path)
+        else:
+            _LOGGER.debug("No scene file for %s; downloading from Govee API", model)
+        return GoveeHelper.download_model_scenes(model, config_dir)
 
-    async def _disconnect_client(self) -> None:
-        if self._client and self._client.is_connected:
-            try:
-                await self._client.disconnect()
-            except BleakError:
-                pass
-        self._client = None
+    @staticmethod
+    def build_model_effect_list(
+        model: str,
+        config_dir: str,
+    ) -> tuple[list[dict[str, Any]], dict[str, int], list[str]]:
+        """Load and return *(scenes_data, effect_map, effect_list)* for *model*.
+        Music-mode pseudo-effects are appended at the end of *effect_list*."""
+        scenes = GoveeHelper.load_model_scenes(model, config_dir)
+        effect_map: dict[str, int] = {}
+        effect_list: list[str] = []
+        for idx, scene in enumerate(scenes):
+            if not scene.get("ptreal_cmds"):
+                continue
+            name = scene["category"] + " - " + scene["scene_name"]
+            unique_name = name
+            counter = 2
+            while unique_name in effect_map:
+                unique_name = f"{name} ({counter})"
+                counter += 1
+            effect_map[unique_name] = idx
+            effect_list.append(unique_name)
+        _LOGGER.debug("Loaded %d effects for model %s", len(effect_list), model)
+        return scenes, effect_map, effect_list
