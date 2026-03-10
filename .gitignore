@@ -1,8 +1,4 @@
 __pycache__
-pythonenv*
 .python-version
 .coverage
-venv
 .venv
-README.md
-custom_components/govee_lights/jsons/*

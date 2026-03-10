@@ -9,7 +9,8 @@
         },
         "data_description": {
           "type": "Choose 'BLE' for direct Bluetooth control, or 'LAN' for local Wi-Fi control."
-        }
+        },
+        "submit": "Next"
       },
       "ble": {
         "title": "Govee BLE",
@@ -20,7 +21,8 @@
         "data_description": {
           "address": "The Bluetooth address of the Govee device discovered nearby.",
           "model": "Model number printed on the device label, e.g. H617C or H6076B."
-        }
+        },
+        "submit": "Add device"
       },
       "lan": {
         "title": "Govee LAN (Wi-Fi)",
@@ -34,7 +36,8 @@
           "lan_device_key": "Select a Govee device discovered on your local network.",
           "lan_ip": "IP address of the Govee device (only needed if not auto-discovered).",
           "lan_sku": "Model number printed on the device label, e.g. H6199 or H6076B. Required for manual IP entry."
-        }
+        },
+        "submit": "Add device"
       },
       "bluetooth_confirm": {
         "title": "Confirm Govee BLE device",
@@ -44,7 +47,8 @@
         },
         "data_description": {
           "model": "Model number printed on the device label, e.g. H617C or H6076B."
-        }
+        },
+        "submit": "Add device"
       }
     },
     "error": {

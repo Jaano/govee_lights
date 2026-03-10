@@ -1,0 +1,79 @@
+[project]
+name = "govee-lights"
+version = "0.3.1"
+description = "Home Assistant custom integration for Govee BLE/LAN LED lights"
+requires-python = ">=3.12"
+license = "MIT"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "UP",     # pyupgrade
+    "B",      # flake8-bugbear
+    "SIM",    # flake8-simplify
+    "ANN",    # flake8-annotations
+    "ASYNC",  # flake8-async (async/await best practices)
+    "RUF",    # ruff-specific rules
+    "PL",     # pylint
+    "TCH",    # flake8-type-checking (move imports to TYPE_CHECKING)
+    "PTH",    # flake8-use-pathlib
+    "TID",    # flake8-tidy-imports
+    "LOG",    # flake8-logging
+    "G",      # flake8-logging-format
+    "ERA",    # eradicate (commented-out code)
+    "C4",     # flake8-comprehensions
+    "PIE",    # flake8-pie (misc lints)
+    "T20",    # flake8-print (no print statements)
+    "RSE",    # flake8-raise
+    "RET",    # flake8-return
+    "SLF",    # flake8-self (private member access)
+    "PERF",   # perflint (performance anti-patterns)
+]
+ignore = [
+    # Annotations
+    "ANN401",  # allow Any in some cases
+
+    # HA patterns that intentionally use broad except/returns
+    "BLE001",  # allow catching blind Exception in HA lifecycle methods
+    "RET505",  # allow elif after return (common HA pattern)
+
+    # Compatibility
+    "UP007",   # allow X | Y union syntax (handled by from __future__ import annotations)
+
+    # Pylint
+    "PLR0913", # too-many-arguments — HA entity constructors naturally have many params
+    "PLR2004", # magic-value-comparison — BLE byte constants are intentional
+    "PLC0415", # import-outside-toplevel
+
+    # Logging format — HA uses %-style
+    "G004",    # allow f-strings in logging
+
+    # Private member access is common in HA integrations accessing _transport etc.
+    "SLF001",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Config flow doesn't need full annotations
+"config_flow.py" = ["ANN"]
+# __init__.py setup functions are typed by HA core stubs
+"__init__.py" = ["ANN"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["custom_components.govee_lights"]
+force-sort-within-sections = true
+split-on-trailing-comma = true
+
+[tool.ruff.lint.flake8-annotations]
+allow-star-arg-any = true
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"

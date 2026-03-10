@@ -53,31 +53,29 @@ After setup, Govee devices appear as light entities in Home Assistant. Select th
 
 ## Scene Effects
 
-BLE scene effects are loaded from a JSON file at:
+Scene effects are loaded from a JSON file stored in your Home Assistant config directory:
 
 ```
-custom_components/govee_lights/jsons/<MODEL>.json
+/config/.storage/govee_lights/<MODEL>.json
 ```
 
-If no file exists for your model, the integration downloads scene data from the Govee API at startup and logs the equivalent `curl` command so you can save the file manually.
+If no file exists for your model, the integration downloads it automatically from the Govee API on first startup and saves it there — no manual steps needed.
 
-### Downloading scene data manually
+### Adding scene data manually
 
-The integration accepts two file formats:
+If you prefer to supply the file yourself, the integration accepts two formats:
 
-- **Flat list** — the compact format produced by govee2mqtt and similar tools. Copy from your govee2mqtt `jsons/` folder if you have it.
-- **Raw API response** — the full JSON returned by the Govee API. Larger file, but parsed automatically.
-
-To download the raw API response, replace `H617C` with your model SKU:
+- **Flat list** — the compact format produced by govee2mqtt. Copy `<MODEL>.json` from govee2mqtt's `jsons/` folder directly into `/config/.storage/govee_lights/`.
+- **Raw API response** — the full JSON returned by the Govee API, downloaded via `curl`:
 
 ```bash
 curl -s 'https://app2.govee.com/appsku/v1/light-effect-libraries?sku=H617C' \
   -H 'AppVersion: 5.6.01' \
   -H 'User-Agent: GoveeHome/5.6.01 (com.ihoment.GoVeeSensor; build:2; iOS 16.5.0) Alamofire/5.6.4' \
-  -o 'custom_components/govee_lights/jsons/H617C.json'
+  -o '/config/.storage/govee_lights/H617C.json'
 ```
 
-Saving the file avoids a runtime download on every restart.
+Replace `H617C` with your model SKU.
 
 ---
 

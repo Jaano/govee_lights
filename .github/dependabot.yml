@@ -1,14 +1,14 @@
 version: 2
+
 updates:
-  - package-ecosystem: github-actions
+  - package-ecosystem: "uv"
     directory: "/"
     schedule:
-      interval: daily
-  - package-ecosystem: pip
-    directory: "/.github/workflows"
-    schedule:
-      interval: daily
-  - package-ecosystem: pip
-    directory: "/"
-    schedule:
-      interval: daily
+      interval: "daily"
+    groups:
+      python-deps:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "build"
+      include: "scope"

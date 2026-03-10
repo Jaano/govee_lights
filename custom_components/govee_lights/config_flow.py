@@ -17,7 +17,7 @@ from homeassistant.data_entry_flow import FlowResult
 from govee_local_api import GoveeController, GoveeDevice
 
 from .const import DOMAIN, CONF_TYPE_BLE, CONF_TYPE_LAN, CONF_LAN_IP, CONF_LAN_DEVICE_ID, CONF_LAN_SKU
-from .govee_ble import GoveeBLE
+from .govee import GoveeBLE
 
 
 def _model_from_ble_name(name: str) -> str:

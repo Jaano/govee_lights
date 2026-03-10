@@ -9,7 +9,8 @@
         },
         "data_description": {
           "type": "BLE – Bluetoothi kaudu, LAN – kohaliku Wi-Fi kaudu."
-        }
+        },
+        "submit": "Edasi"
       },
       "ble": {
         "title": "Govee BLE",
@@ -20,7 +21,8 @@
         "data_description": {
           "address": "Läheduses avastatud Govee seadme Bluetoothi aadress.",
           "model": "Mudelinumber seadme kleebiselt, nt H617C või H6076B."
-        }
+        },
+        "submit": "Lisa seade"
       },
       "lan": {
         "title": "Govee LAN (Wi-Fi)",
@@ -34,7 +36,8 @@
           "lan_device_key": "Vali automaatselt avastatud seade.",
           "lan_ip": "IP-aadress, kui seadet ei avastatud automaatselt.",
           "lan_sku": "Mudelinumber seadme kleebiselt, nt H6199 või H6076B. Vajalik käsitsi lisamisel."
-        }
+        },
+        "submit": "Lisa seade"
       },
       "bluetooth_confirm": {
         "title": "Kinnita Govee BLE seade",
@@ -44,7 +47,8 @@
         },
         "data_description": {
           "model": "Mudelinumber seadme kleebiselt, nt H617C või H6076B."
-        }
+        },
+        "submit": "Lisa seade"
       }
     },
     "error": {

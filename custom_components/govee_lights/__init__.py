@@ -10,7 +10,7 @@ from homeassistant.const import CONF_MODEL, MAJOR_VERSION, MINOR_VERSION
 
 from govee_local_api import GoveeController, GoveeDevice
 
-from .govee_ble import GoveeBLE
+from .govee import GoveeBLE, GoveeBLECoordinator
 from .const import DOMAIN, CONF_LAN_IP, CONF_LAN_DEVICE_ID, CONF_LAN_SKU
 import logging
 
@@ -22,10 +22,12 @@ class Hub:
     def __init__(
         self,
         address: str = None,
-        lan_device: GoveeDevice = None,
-        lan_controller: GoveeController = None,
+        ble_coordinator: GoveeBLECoordinator | None = None,
+        lan_device: GoveeDevice | None = None,
+        lan_controller: GoveeController | None = None,
     ) -> None:
         self.address = address
+        self.ble_coordinator = ble_coordinator
         self.lan_device = lan_device
         self.lan_controller = lan_controller
 
@@ -40,15 +42,8 @@ async def async_setup_ble(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             f"Could not find Govee BLE device with address {address}"
         )
 
-    try:
-        client = await GoveeBLE.connect_to(ble_device, address)
-        await client.disconnect()
-    except Exception as err:
-        raise ConfigEntryNotReady(
-            f"Could not connect to Govee BLE device {address}"
-        ) from err
-
-    entry.runtime_data = Hub(address=address)
+    coordinator = GoveeBLECoordinator(hass, address, entry.data["model"])
+    entry.runtime_data = Hub(address=address, ble_coordinator=coordinator)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
