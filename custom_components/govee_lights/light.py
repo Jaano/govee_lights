@@ -42,7 +42,7 @@ async def async_setup_entry(
 class GoveeLight(LightEntity, RestoreEntity):
     _attr_has_entity_name = True
     _attr_should_poll = False
-    _attr_supported_features = LightEntityFeature(LightEntityFeature.EFFECT)
+    _attr_supported_features = LightEntityFeature.EFFECT
 
     def __init__(self, hub: GoveeCoordinator, config_entry: ConfigEntry) -> None:
         self._coordinator: GoveeCoordinator = hub

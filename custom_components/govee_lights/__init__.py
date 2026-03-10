@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from homeassistant.components import bluetooth
-from homeassistant.const import CONF_MODEL
+from homeassistant.const import CONF_MODEL, Platform
 from homeassistant.exceptions import ConfigEntryNotReady
 
 from .const import CONF_LAN_IP
@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[str] = ["light"]
+PLATFORMS: list[Platform] = [Platform.LIGHT]
 
 async def async_setup_ble(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Govee BLE"""
@@ -61,5 +61,3 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
 
-async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
-    return True
