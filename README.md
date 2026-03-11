@@ -4,10 +4,11 @@
 ![Python](https://img.shields.io/badge/python-3670A0?style=for-the-badge&logo=python&logoColor=ffdd54)
 <img src="assets/govee-logo.png" alt="Govee Logo" width="125">
 
-Control Govee lighting devices via local LAN or direct BLE from Home Assistant.
+Controls Govee lighting from Home Assistant over local LAN or direct BLE. No cloud, no bridge.
+
 Includes patches from [cralex96](https://github.com/cralex96/govee_ble_lights) and [Rombond](https://github.com/Rombond/h617a_govee_ble_lights).
 
-Segmented lighting is not supported.
+Segmented lighting isn't supported.
 
 ---
 
@@ -26,10 +27,10 @@ Segmented lighting is not supported.
 
 ## Features
 
-- **Direct BLE Control**: Control Govee devices directly over Bluetooth without any bridge or middleware.
-- **LAN Control**: Local Wi-Fi control for supported devices — no cloud required.
-- **Scene Selection**: Choose from all available device scenes.
-- **Lighting Control**: Adjust brightness, color, and power state.
+- Direct BLE control, no bridge or middleware needed
+- Local Wi-Fi (LAN) control for supported devices, no cloud
+- Full scene list loaded from your device
+- Brightness, color, and power state
 
 ---
 
@@ -59,7 +60,7 @@ Scene effects are loaded from a JSON file stored in your Home Assistant config d
 /config/.storage/govee_lights/<MODEL>.json
 ```
 
-If no file exists for your model, the integration downloads it automatically from the Govee API on first startup and saves it there — no manual steps needed.
+If no file exists for your model, the integration downloads it from the Govee API on first startup and saves it there.
 
 ### Adding scene data manually
 
@@ -81,9 +82,9 @@ Replace `H617C` with your model SKU.
 
 ## Troubleshooting
 
-1. **BLE range**: Make sure the Govee device is within Bluetooth range of the Home Assistant host or a configured [Bluetooth proxy](https://www.home-assistant.io/integrations/bluetooth/#remote-adapters-bluetooth-proxies).
-2. **Model selection**: Confirm the correct model was selected during setup.
-3. **Logs**: Check **Settings > System > Logs** for errors from the Govee integration.
+1. **BLE range**: the device must be within Bluetooth range of your HA host or a configured [Bluetooth proxy](https://www.home-assistant.io/integrations/bluetooth/#remote-adapters-bluetooth-proxies).
+2. **Model selection**: confirm the correct model was chosen during setup.
+3. **Logs**: check **Settings > System > Logs** for errors from the integration.
 
 ---
 
