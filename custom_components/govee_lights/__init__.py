@@ -3,9 +3,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from homeassistant.components import bluetooth
 from homeassistant.const import CONF_MODEL, Platform
-from homeassistant.exceptions import ConfigEntryNotReady
 
 from .const import CONF_LAN_IP
 from .govee_ble import GoveeBLECoordinator
@@ -22,15 +20,9 @@ _LOGGER = logging.getLogger(__name__)
 PLATFORMS: list[Platform] = [Platform.LIGHT]
 
 async def async_setup_ble(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up Govee BLE"""
+    """Set up Govee Lights BLE entry."""
     address = entry.unique_id
     assert address is not None
-    ble_device = bluetooth.async_ble_device_from_address(hass, address.upper(), True)
-    if not ble_device:
-        raise ConfigEntryNotReady(
-            f"Could not find Govee BLE device with address {address}"
-        )
-
     entry.runtime_data = GoveeBLECoordinator(hass, address, entry.data["model"])
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True

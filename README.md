@@ -6,30 +6,13 @@
 
 Controls Govee lighting from Home Assistant over local LAN or direct BLE. No cloud, no bridge.
 
-Includes patches from [cralex96](https://github.com/cralex96/govee_ble_lights) and [Rombond](https://github.com/Rombond/h617a_govee_ble_lights).
-
-Segmented lighting isn't supported.
-
----
-
-## Table of Contents
-
-- [Features](#features)
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [Usage](#usage)
-- [Scene Effects](#scene-effects)
-- [Removal](#removal)
-- [Support & Contribution](#support--contribution)
-- [License](#license)
-
 ---
 
 ## Features
 
 - Direct BLE control, no bridge or middleware needed
 - Local Wi-Fi (LAN) control for supported devices, no cloud
-- Full scene list loaded from your device
+- Full scene list sourced from the Govee API and cached locally
 - Brightness, color, and power state
 
 ---
@@ -42,13 +25,13 @@ Segmented lighting isn't supported.
 
 ## Configuration
 
-**BLE:** Ensure Home Assistant has Bluetooth access on your host machine.
+For BLE: make sure Home Assistant has Bluetooth access on your host machine.
 
-**LAN:** Enable the LAN API in the Govee Home app (Settings → Devices → your device → LAN Control).
+For LAN: enable the LAN API in the Govee Home app under Settings → Devices → your device → LAN Control.
 
 ## Usage
 
-After setup, Govee devices appear as light entities in Home Assistant. Select the correct device model when adding a BLE device.
+After setup the device shows up as a light entity in HA. For BLE devices, make sure you pick the right model during setup — the model determines which scene effects and brightness encoding are used.
 
 ---
 
@@ -64,10 +47,10 @@ If no file exists for your model, the integration downloads it from the Govee AP
 
 ### Adding scene data manually
 
-If you prefer to supply the file yourself, the integration accepts two formats:
+The integration accepts two formats:
 
-- **Flat list** — the compact format produced by govee2mqtt. Copy `<MODEL>.json` from govee2mqtt's `jsons/` folder directly into `/config/.storage/govee_lights/`.
-- **Raw API response** — the full JSON returned by the Govee API, downloaded via `curl`:
+- Flat list: the compact format produced by govee2mqtt. Copy `<MODEL>.json` from govee2mqtt's `jsons/` folder directly into `/config/.storage/govee_lights/`.
+- Raw API response: the full JSON from the Govee API, fetched via `curl`:
 
 ```bash
 curl -s 'https://app2.govee.com/appsku/v1/light-effect-libraries?sku=H617C' \
@@ -82,32 +65,23 @@ Replace `H617C` with your model SKU.
 
 ## Troubleshooting
 
-1. **BLE range**: the device must be within Bluetooth range of your HA host or a configured [Bluetooth proxy](https://www.home-assistant.io/integrations/bluetooth/#remote-adapters-bluetooth-proxies).
-2. **Model selection**: confirm the correct model was chosen during setup.
-3. **Logs**: check **Settings > System > Logs** for errors from the integration.
+1. BLE range: the device must be within Bluetooth range of your HA host or a configured [Bluetooth proxy](https://www.home-assistant.io/integrations/bluetooth/#remote-adapters-bluetooth-proxies).
+2. Model selection: confirm the correct model was chosen during setup.
+3. Logs: check Settings > System > Logs for errors from the integration.
 
 ---
 
 ## Removal
 
-**Via Home Assistant UI:**
+Via the HA UI: Settings > Devices & Services, find the entry, open the three-dot menu, select Delete.
 
-1. Go to **Settings > Devices & Services**.
-2. Find the integration entry and open it.
-3. Click the three-dot menu and select **Delete**.
-
-**Via HACS (removes component files):**
-
-1. Open HACS and go to **Integrations**.
-2. Find **Enhanced Govee Lights**, open the three-dot menu, and select **Remove**.
-3. Restart Home Assistant.
+Via HACS: open HACS > Integrations, find Enhanced Govee Lights, three-dot menu > Remove, then restart HA.
 
 ---
 
-## Support & Contribution
+## Support
 
-- **Issues**: Report bugs or missing device support in the [issue tracker](https://github.com/Jaano/govee_lights/issues).
-- **Contributions**: Fork the repository and submit a pull request.
+Report bugs or missing device support in the [issue tracker](https://github.com/Jaano/govee_lights/issues). PRs welcome.
 
 ---
 

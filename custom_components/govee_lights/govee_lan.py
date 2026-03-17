@@ -26,9 +26,7 @@ from .govee import GoveeHelper
 _LOGGER = logging.getLogger(__name__)
 
 
-# ╔══════════════════════════════════════════════════════════════════════════╗
-# ║  GoveeLANCoordinator                                                     ║
-# ╚══════════════════════════════════════════════════════════════════════════╝
+# ── GoveeLANCoordinator ──────────────────────────────────────────────────────
 
 
 class GoveeLANCoordinator(GoveeCoordinator):

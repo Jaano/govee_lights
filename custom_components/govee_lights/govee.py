@@ -22,6 +22,14 @@ _GOVEE_SCENE_DOWNLOAD_TIMEOUT: int = 10  # seconds for scene data HTTP requests
 class GoveeHelper:
     """Generic Govee helpers: scene download, parsing, and effect list building."""
 
+    # ── Model capability flags ───────────────────────────────────────────────
+    # Models that encode RGB colour in a segmented SEGMENTS (0x15 0x01 …) BLE packet format.
+    SEGMENTED_MODELS: list[str] = ["H6053", "H6072", "H6102", "H6199", "H617A", "H617C"]
+    # Models that express brightness as a 0-100 percentage rather than 0-255.
+    PERCENT_MODELS: list[str] = ["H617A", "H617C"]
+    # Models that use mode byte 0x0D instead of 0x02 for colour/CT BLE packets.
+    COLOUR_D_MODELS: list[str] = ["H6005", "H6052", "H6058", "H6102", "H613B", "H613D", "H617E"]
+
     @staticmethod
     def build_ptreal_cmds(scene_code: int, scence_param: str) -> list[str]:
         """Encode a scene into pre-built BLE/ptReal packet frames (base64-encoded 20-byte packets).

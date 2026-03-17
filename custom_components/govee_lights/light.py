@@ -104,7 +104,7 @@ class GoveeLight(LightEntity, RestoreEntity):
         if self._coordinator.setup_in_background:
             self.hass.async_create_background_task(
                 self._coordinator.async_setup(),
-                f"govee_initial_connect_{self._attr_unique_id}",
+                f"govee_lights_initial_connect_{self._attr_unique_id}",
             )
         else:
             await self._coordinator.async_setup()
