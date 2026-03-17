@@ -1,4 +1,5 @@
 # Enhanced Govee Lights for Home Assistant
+
 ![Home Assistant](https://img.shields.io/badge/home%20assistant-%2341BDF5.svg?style=for-the-badge&logo=home-assistant&logoColor=white)
 [![hacs](https://img.shields.io/badge/HACS-Integration-blue.svg?style=for-the-badge)](https://github.com/hacs/integration)
 ![Python](https://img.shields.io/badge/python-3670A0?style=for-the-badge&logo=python&logoColor=ffdd54)
@@ -56,7 +57,7 @@ The integration accepts two formats:
 curl -s 'https://app2.govee.com/appsku/v1/light-effect-libraries?sku=H617C' \
   -H 'AppVersion: 5.6.01' \
   -H 'User-Agent: GoveeHome/5.6.01 (com.ihoment.GoVeeSensor; build:2; iOS 16.5.0) Alamofire/5.6.4' \
-  -o '/config/.storage/govee_lights/H617C.json'
+  -o 'config/.storage/govee_lights/H617C.json'
 ```
 
 Replace `H617C` with your model SKU.
@@ -85,7 +86,15 @@ Report bugs or missing device support in the [issue tracker](https://github.com/
 
 ---
 
+## Credits
+
+- [@cralex96](https://github.com/cralex96) and [@Rombond](https://github.com/Rombond) — original BLE patches this integration grew from
+- [@Laserology](https://github.com/Laserology/govee_ble_lights) — original BLE implementation and model reverse-engineering, which this integration's BLE code is based on
+- [@teh-hippo](https://github.com/teh-hippo/govee_ble_lights) — independent BLE implementation, particularly useful for H6199 and state-reading
+- [@wez](https://github.com/wez/govee2mqtt) — govee2mqtt's LAN protocol work and scene handling saved a lot of guesswork here
+
+---
+
 ## License
 
 MIT License. See the [LICENSE file](https://github.com/Jaano/govee_lights/blob/main/LICENSE) for details.
-

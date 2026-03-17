@@ -118,7 +118,7 @@ When `colorTemInKelvin == 0` the device is in RGB mode; `color` carries the acti
 
 ### `brightness` — Set brightness
 
-Value is a percentage **0–100** (unlike BLE which uses 0–255 raw or also 0–100 percent depending on model).
+Value is a percentage 0–100 (unlike BLE which uses 0–255 raw or also 0–100 percent depending on model).
 
 ```json
 { "msg": { "cmd": "brightness", "data": { "value": 75 } } }
@@ -227,7 +227,7 @@ await asyncio.wait_for(device_found.wait(), timeout=5.0)
 ## 2. Periodic state updates
 
 `GoveeController` is created with `update_enabled=True, update_interval=10`.  
-The library automatically sends a `devStatus` query to the device every **10 seconds**:
+The library automatically sends a `devStatus` query to the device every 10 seconds:
 
 ```
 (every 10 s)

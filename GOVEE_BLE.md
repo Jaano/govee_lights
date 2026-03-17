@@ -267,7 +267,7 @@ No `_available = False` is set; the device is just disconnected at the GATT leve
 
 `_dispatch()` retries up to 3 times with exponential backoff (2 s, 4 s). After all retries are exhausted:
 
-- `_available = False` → HA entity shows **Unavailable**
+- `_available = False` → HA entity shows Unavailable
 - Advertisement watcher is registered (see §5.3)
 
 ### 5.2 Unexpected GATT disconnect
@@ -276,7 +276,7 @@ Bleak calls `_handle_ble_disconnect` immediately when the connection drops (rega
 
 - Idle timer cancelled
 - `_client = None`
-- `_available = False` → HA entity shows **Unavailable**
+- `_available = False` → HA entity shows Unavailable
 - Advertisement watcher registered (see §5.3)
 
 ### 5.3 Advertisement watcher (auto-reconnect)
@@ -314,7 +314,7 @@ async_added_to_hass()                        (light.py)
        └─ _send_state_queries()              (AA 01, AA 04, AA 05)
        └─ _available = True
 
-Each subsequent command also spawns a background state-verification task (§2.10).
+Each subsequent command also spawns a background state-verification task (§2.9).
 ```
 
 ---
