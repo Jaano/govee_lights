@@ -24,9 +24,11 @@ class GoveeHelper:
 
     # ── Model capability flags ───────────────────────────────────────────────
     # Models that encode RGB colour in a segmented SEGMENTS (0x15 0x01 …) BLE packet format.
-    SEGMENTED_MODELS: list[str] = ["H6053", "H6072", "H6102", "H6199", "H617A", "H617C"]
+    SEGMENTED_MODELS: list[str] = [
+        "H6053", "H6072", "H6102", "H6199", "H617A", "H617C", "H617E", "H618C",
+    ]
     # Models that express brightness as a 0-100 percentage rather than 0-255.
-    PERCENT_MODELS: list[str] = ["H617A", "H617C"]
+    PERCENT_MODELS: list[str] = ["H613A", "H617A", "H617C", "H618C", "H6199"]
     # Models that use mode byte 0x0D instead of 0x02 for colour/CT BLE packets.
     COLOUR_D_MODELS: list[str] = ["H6005", "H6052", "H6058", "H6102", "H613B", "H613D", "H617E"]
 

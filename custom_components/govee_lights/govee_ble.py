@@ -473,7 +473,7 @@ class GoveeBLECoordinator(GoveeCoordinator):
 
     async def async_set_brightness(self, brightness: int) -> None:
         """Set brightness. brightness is HA scale (0-255)."""
-        val = int(brightness * 100 / 255) if self.model in GoveeBLE.PERCENT_MODELS else brightness
+        val = round(brightness * 100 / 255) if self.model in GoveeBLE.PERCENT_MODELS else brightness
         await self.send_command(GoveeBLE.build_single_packet(GoveeBLE.LEDCommand.BRIGHTNESS, [val]))
 
     async def async_set_rgb_color(self, r: int, g: int, b: int) -> None:
