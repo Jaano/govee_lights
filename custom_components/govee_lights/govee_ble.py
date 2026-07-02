@@ -352,8 +352,16 @@ class GoveeBLECoordinator(GoveeCoordinator):
         self.mode: int | None = None
         self.music_mode_id: int | None = None
 
+        self._issue_key = f"ble_needs_pairing_{address.replace(':', '')}"
+
         self._unsub_stop: CALLBACK_TYPE | None = hass.bus.async_listen_once(
             EVENT_HOMEASSISTANT_STOP, self._handle_hass_stop
+        )
+        # Passive availability tracking: HA's bluetooth manager fires this
+        # when no scanner has seen an advertisement for a while, independent
+        # of whether we have ever tried to connect/send a command.
+        self._unsub_unavailable: CALLBACK_TYPE | None = bluetooth.async_track_unavailable(
+            hass, self._handle_ble_unavailable, address.upper(), connectable=True
         )
 
     # ── Public coordinator interface ─────────────────────────────────────────
@@ -411,8 +419,23 @@ class GoveeBLECoordinator(GoveeCoordinator):
         return None
 
     def cleanup(self) -> None:
-        """Cancel the advertisement watcher if active."""
+        """Cancel the advertisement watcher and unavailable tracker, if active."""
         self._cancel_advertisement_watcher()
+        if self._unsub_unavailable:
+            self._unsub_unavailable()
+            self._unsub_unavailable = None
+        self._clear_repair_issue(self._issue_key)
+
+    @callback
+    def _handle_ble_unavailable(
+        self, _service_info: bluetooth.BluetoothServiceInfoBleak
+    ) -> None:
+        """Called by HA's bluetooth manager when no scanner has seen this device recently."""
+        if self._available:
+            _LOGGER.debug("BLE advertisement timeout for %s (%s)", self.model, self.address)
+            self._available = False
+            self.async_set_updated_data(self._state_snapshot())
+        self._register_advertisement_watcher()
 
     async def async_setup(self) -> None:
         """Connect to the device and query initial state. Safe to call from a background task."""
@@ -586,6 +609,23 @@ class GoveeBLECoordinator(GoveeCoordinator):
             disconnected_callback=self._handle_ble_disconnect,
         )
         _LOGGER.debug("Connected to %s (%s)", self.model, self.address)
+
+        if self._client.services.get_characteristic(BLE_UUID_CONTROL_CHARACTERISTIC) is None:
+            # The device is connectable and answers GATT service discovery, but
+            # is missing the Govee control service entirely. This happens when
+            # a device has been factory-reset or is mid-onboarding - it needs
+            # to be re-paired/re-onboarded in the Govee app before it can be
+            # controlled again.
+            self._raise_repair_issue(
+                self._issue_key, "ble_needs_pairing", model=self.model, address=self.address,
+            )
+            await self._disconnect_client()
+            raise BleakError(
+                f"{self.address} is connectable but has no Govee control characteristic "
+                "- device likely needs re-pairing/onboarding"
+            )
+        self._clear_repair_issue(self._issue_key)
+
         self._reset_disconnect_timer()
         await self._start_notify()
         await self._send_state_queries()

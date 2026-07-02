@@ -59,5 +59,15 @@
       "already_configured": "Seade on juba seadistatud",
       "no_devices_found": "Võrgust ei leitud ühtegi seadet"
     }
+  },
+  "issues": {
+    "ble_needs_pairing": {
+      "title": "Govee {model} vajab uuesti sidumist",
+      "description": "Seade aadressil {address} on Bluetoothi kaudu leitav, kuid ei paku juhtimisteenust. Tõenäoliselt on seade tehaseseadetele lähtestatud. Seosta seade uuesti Govee Home rakenduses, misjärel loob see automaatselt uue ühenduse."
+    },
+    "lan_not_responding": {
+      "title": "Govee {sku} ei vasta LAN API päringutele",
+      "description": "Seade aadressil {ip} on võrgus olemas, kuid ei vasta olekupäringutele. Kontrolli, et LAN API oleks selle seadme jaoks Govee Home rakenduses sisse lülitatud (Seadme seaded → LAN juhtimine)."
+    }
   }
 }

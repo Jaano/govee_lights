@@ -59,5 +59,15 @@
       "already_configured": "Device is already configured",
       "no_devices_found": "No devices found on the network"
     }
+  },
+  "issues": {
+    "ble_needs_pairing": {
+      "title": "Govee {model} needs re-pairing",
+      "description": "The device at {address} is reachable over Bluetooth but is not exposing its control service. It was likely factory-reset. Re-onboard it in the Govee Home app, then it will reconnect automatically."
+    },
+    "lan_not_responding": {
+      "title": "Govee {sku} is not answering LAN API requests",
+      "description": "The device at {ip} is on the network but does not answer status requests. Make sure the LAN API is enabled for this device in the Govee Home app (Device settings → LAN Control)."
+    }
   }
 }

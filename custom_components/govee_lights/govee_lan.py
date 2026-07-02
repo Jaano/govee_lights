@@ -9,58 +9,71 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from datetime import datetime, timedelta
 import logging
 from typing import TYPE_CHECKING, Any
 
 from govee_local_api import GoveeController, GoveeDevice
 from govee_local_api.message import PtRealMessage
 from homeassistant.components.light.const import ColorMode
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.core import callback
+from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
+from homeassistant.helpers.event import async_track_time_interval
 
 if TYPE_CHECKING:
-    from homeassistant.core import HomeAssistant
+    from homeassistant.core import CALLBACK_TYPE, HomeAssistant
 
 from .coordinator import GoveeCoordinator
 from .govee import GoveeHelper
 
 _LOGGER = logging.getLogger(__name__)
 
+# Consecutive missed 10 s update polls (+ margin) before a bound device is
+# considered offline.
+LAN_OFFLINE_AFTER_SECONDS: int = 35
+# How long a discovered-but-never-responding device is given before we
+# suspect it needs the LAN API re-enabled in the Govee app.
+LAN_NOT_RESPONDING_AFTER_SECONDS: int = 60
+LAN_LIVENESS_CHECK_INTERVAL: int = 10
+
 
 # ── GoveeLANCoordinator ──────────────────────────────────────────────────────
 
 
 class GoveeLANCoordinator(GoveeCoordinator):
-    """Manages a govee-local-api controller and device for a single LAN (Wi-Fi) device."""
+    """Manages a govee-local-api controller and device for a single LAN (Wi-Fi) device.
 
-    def __init__(
-        self,
-        hass: HomeAssistant,
-        device: GoveeDevice,
-        controller: GoveeController,
-    ) -> None:
-        super().__init__(hass, _LOGGER, f"Govee {device.sku} ({device.ip})")
-        self.device = device
-        self.controller = controller
+    The coordinator is constructed immediately from config-entry data (IP + SKU)
+    without waiting for the device to respond, so a powered-off device never
+    prevents the config entry from loading.  ``self.device`` is bound lazily as
+    soon as discovery sees it, and a liveness timer (based on
+    ``GoveeDevice.lastseen``) marks the device unavailable again if it goes
+    quiet, without requiring an HA restart in either direction.
+    """
 
-        # Last-known device state (updated from GoveeDevice callbacks)
+    def __init__(self, hass: HomeAssistant, ip: str, sku: str) -> None:
+        super().__init__(hass, _LOGGER, f"Govee {sku} ({ip})")
+        self.ip = ip
+        self.sku = sku
+        self.device: GoveeDevice | None = None
+        self.controller: GoveeController | None = None
+
+        self._bound_at: datetime | None = None
+        self._unsub_liveness: CALLBACK_TYPE | None = None
+        self._issue_key = f"lan_not_responding_{sku}_{ip.replace('.', '_')}"
 
     # ── Factory ───────────────────────────────────────────────────────────────
 
     @classmethod
-    async def async_create(cls, hass: HomeAssistant, ip: str) -> GoveeLANCoordinator:
-        """Discover the device at *ip* and return a coordinator, or raise ConfigEntryNotReady."""
-        device_found: asyncio.Event = asyncio.Event()
-
-        def _on_discovered(device: GoveeDevice, is_new: bool) -> bool:
-            if device.ip == ip:
-                device_found.set()
-            return True
+    async def async_create(cls, hass: HomeAssistant, ip: str, sku: str) -> GoveeLANCoordinator:
+        """Build a coordinator for *ip*/*sku* and start discovery, without blocking on it."""
+        coord = cls(hass, ip, sku)
 
         controller = GoveeController(
-            discovered_callback=_on_discovered,
+            discovered_callback=coord._on_discovered,
             discovery_enabled=False,
             update_enabled=True,
-            update_interval=10,
+            update_interval=LAN_LIVENESS_CHECK_INTERVAL,
         )
         controller.add_device_to_discovery_queue(ip)
 
@@ -68,37 +81,40 @@ class GoveeLANCoordinator(GoveeCoordinator):
             await controller.start()
         except OSError as err:
             controller.cleanup()
+            # A host-level problem (socket bind), not a device problem - HA
+            # should retry entry setup, unlike a merely-offline device.
             raise ConfigEntryNotReady(f"Could not bind LAN API socket: {err}") from err
 
-        try:
-            await asyncio.wait_for(device_found.wait(), timeout=5.0)
-        except TimeoutError:
-            controller.cleanup()
-            raise ConfigEntryNotReady(
-                f"Could not reach Govee LAN device at {ip} - "
-                "check IP address and that the LAN API is enabled in the Govee app."
-            ) from None
-
-        device = controller.get_device_by_ip(ip)
-        if device is None:
-            controller.cleanup()
-            raise ConfigEntryNotReady(f"Device at {ip} responded but could not be registered")
-
-        coord = cls(hass, device, controller)
-        device.set_update_callback(coord._on_device_update)
+        coord.controller = controller
+        coord._unsub_liveness = async_track_time_interval(
+            hass, coord._check_liveness, timedelta(seconds=LAN_LIVENESS_CHECK_INTERVAL)
+        )
         return coord
+
+    @callback
+    def _on_discovered(self, device: GoveeDevice, is_new: bool) -> bool:
+        """Bind (or rebind) the device once discovery finds *ip*."""
+        if device.ip != self.ip:
+            return True
+        if self.device is not device:
+            self.device = device
+            self._bound_at = datetime.now()
+            device.set_update_callback(self._on_device_update)
+            if self.controller is not None:
+                self.controller.send_update_message()
+        return True
 
     # ── Public coordinator interface ─────────────────────────────────────────
 
     @property
     def unique_device_id(self) -> str:
-        """Unique identifier for this device (device SKU)."""
-        return self.device.sku
+        """Unique identifier for this device (SKU, from config-entry data)."""
+        return self.sku
 
     @property
     def device_key(self) -> str:
         """SKU, used for effect list loading and device labelling."""
-        return self.device.sku
+        return self.sku
 
     @property
     def current_rgb_color(self) -> tuple[int, int, int] | None:
@@ -134,12 +150,19 @@ class GoveeLANCoordinator(GoveeCoordinator):
         return None
 
     def cleanup(self) -> None:
-        self.device.set_update_callback(None)
-        self.controller.cleanup()
+        if self._unsub_liveness:
+            self._unsub_liveness()
+            self._unsub_liveness = None
+        if self.device:
+            self.device.set_update_callback(None)
+        if self.controller:
+            self.controller.cleanup()
+        self._clear_repair_issue(self._issue_key)
 
     async def async_setup(self) -> None:
-        """Send an initial state-query to the device."""
-        self.controller.send_update_message()
+        """Send an initial state-query to the device, if already bound."""
+        if self.controller is not None:
+            self.controller.send_update_message()
 
     async def async_load_effects(self, config_dir: str) -> None:
         """Load the scene/effect list in an executor thread and store results."""
@@ -150,28 +173,35 @@ class GoveeLANCoordinator(GoveeCoordinator):
         self._effect_map = effect_map
         self._effect_list = effect_list
 
+    def _require_device(self) -> GoveeDevice:
+        """Return the bound GoveeDevice, or raise if the device is unreachable."""
+        if self.device is None:
+            raise HomeAssistantError(f"Govee device at {self.ip} is unreachable")
+        return self.device
+
     async def async_turn_on(self) -> None:
-        await self.device.turn_on()
+        await self._require_device().turn_on()
 
     async def async_turn_off(self) -> None:
-        await self.device.turn_off()
+        await self._require_device().turn_off()
 
     async def async_set_brightness(self, brightness: int) -> None:
-        await self.device.set_brightness(round(brightness * 100 / 255))
+        await self._require_device().set_brightness(round(brightness * 100 / 255))
 
     async def async_set_rgb_color(self, r: int, g: int, b: int) -> None:
-        await self.device.set_rgb_color(r, g, b)
+        await self._require_device().set_rgb_color(r, g, b)
 
     async def async_set_color_temp(self, kelvin: int) -> None:
-        await self.device.set_temperature(kelvin)
+        await self._require_device().set_temperature(kelvin)
 
     async def async_set_effect(self, ptreal_cmds: list[str]) -> None:
         """Apply a ptReal scene effect and power the device on."""
+        device = self._require_device()
         raw_packets: list[bytes | bytearray] = [
             bytearray(base64.b64decode(c)) for c in ptreal_cmds
         ]
         self.send_ptreal_scene(raw_packets)
-        await self.device.turn_on()
+        await device.turn_on()
 
     async def async_apply_effect(self, effect: str) -> None:
         """Apply a named scene effect."""
@@ -245,13 +275,14 @@ class GoveeLANCoordinator(GoveeCoordinator):
 
     def send_ptreal_scene(self, ptreal_cmds: list[bytes | bytearray]) -> None:
         """Send all ptReal packets as a single UDP datagram via the controller transport."""
-        transport = self.controller._transport  # type: ignore[attr-defined]
-        if transport is None:
+        device = self._require_device()
+        if self.controller is None or self.controller._transport is None:  # type: ignore[attr-defined]
             _LOGGER.warning("LAN controller transport not ready; cannot send scene")
             return
         msg = PtRealMessage(ptreal_cmds, do_checksum=False)
+        transport = self.controller._transport  # type: ignore[attr-defined]
         port = self.controller._device_command_port  # type: ignore[attr-defined]
-        transport.sendto(bytes(msg), (self.device.ip, port))
+        transport.sendto(bytes(msg), (device.ip, port))
 
     def _on_device_update(self, device: GoveeDevice) -> None:
         """Called by the govee-local-api controller when a devStatus response arrives."""
@@ -266,7 +297,34 @@ class GoveeLANCoordinator(GoveeCoordinator):
         if not self._available:
             _LOGGER.info("LAN device %s (%s) is available", device.sku, device.ip)
             self._available = True
+        self._clear_repair_issue(self._issue_key)
         self.async_set_updated_data(self._state_snapshot())
+
+    @callback
+    def _check_liveness(self, _now: datetime) -> None:
+        """Periodic check: mark the device unavailable if it has gone quiet.
+
+        Also raises a Repairs issue when the device is discovered (answers
+        broadcast scans) but never answers status requests - typically means
+        the LAN API needs to be re-enabled for it in the Govee app.
+        """
+        if self.device is None:
+            return
+
+        if self._available:
+            age = (datetime.now() - self.device.lastseen).total_seconds()
+            if age > LAN_OFFLINE_AFTER_SECONDS:
+                _LOGGER.info("LAN device %s (%s) is unreachable", self.sku, self.ip)
+                self._available = False
+                self.async_set_updated_data(self._state_snapshot())
+            return
+
+        if self._bound_at is not None:
+            since_bound = (datetime.now() - self._bound_at).total_seconds()
+            if since_bound > LAN_NOT_RESPONDING_AFTER_SECONDS:
+                self._raise_repair_issue(
+                    self._issue_key, "lan_not_responding", sku=self.sku, ip=self.ip
+                )
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Required by DataUpdateCoordinator; returns a snapshot of current state."""

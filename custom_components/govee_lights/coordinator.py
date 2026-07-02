@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+
+from .const import DOMAIN
 
 if TYPE_CHECKING:
     import logging
@@ -110,4 +113,24 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_apply_effect(self, effect: str) -> None:
         raise NotImplementedError
+
+    # ── Repair issues (shared by BLE/LAN subclasses) ────────────────────────
+
+    def _raise_repair_issue(
+        self, issue_key: str, translation_key: str, **placeholders: str
+    ) -> None:
+        """Create (or update) a Repairs issue for this device."""
+        ir.async_create_issue(
+            self.hass,
+            DOMAIN,
+            issue_key,
+            is_fixable=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key=translation_key,
+            translation_placeholders=placeholders,
+        )
+
+    def _clear_repair_issue(self, issue_key: str) -> None:
+        """Delete a previously raised Repairs issue, if any."""
+        ir.async_delete_issue(self.hass, DOMAIN, issue_key)
 

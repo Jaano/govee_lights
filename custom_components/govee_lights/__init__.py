@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 from homeassistant.const import CONF_MODEL, Platform
 
-from .const import CONF_LAN_IP
+from .const import CONF_LAN_IP, CONF_LAN_SKU
 from .govee_ble import GoveeBLECoordinator
 from .govee_lan import GoveeLANCoordinator
 
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.LIGHT]
+PLATFORMS: list[Platform] = [Platform.BINARY_SENSOR, Platform.LIGHT]
 
 async def async_setup_ble(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Govee Lights BLE entry."""
@@ -31,7 +31,8 @@ async def async_setup_ble(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_setup_lan(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up a Govee LAN (Wi-Fi) device using govee-local-api."""
     ip = entry.data[CONF_LAN_IP]
-    entry.runtime_data = await GoveeLANCoordinator.async_create(hass, ip)
+    sku = entry.data[CONF_LAN_SKU]
+    entry.runtime_data = await GoveeLANCoordinator.async_create(hass, ip, sku)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
@@ -42,6 +43,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await async_setup_ble(hass, entry)
     elif entry.data.get(CONF_LAN_IP):
         await async_setup_lan(hass, entry)
+    else:
+        return False
+
+    # Connect/query the device without blocking entry setup on it - an
+    # unreachable device is a normal runtime state, not a setup failure.
+    coordinator: GoveeCoordinator = entry.runtime_data
+    if coordinator.setup_in_background:
+        entry.async_create_background_task(
+            hass,
+            coordinator.async_setup(),
+            f"govee_lights_initial_connect_{entry.entry_id}",
+        )
+    else:
+        await coordinator.async_setup()
 
     return True
 

@@ -100,14 +100,8 @@ class GoveeLight(LightEntity, RestoreEntity):
         self.async_on_remove(
             self._coordinator.async_add_listener(self._handle_coordinator_update)
         )
-
-        if self._coordinator.setup_in_background:
-            self.hass.async_create_background_task(
-                self._coordinator.async_setup(),
-                f"govee_lights_initial_connect_{self._attr_unique_id}",
-            )
-        else:
-            await self._coordinator.async_setup()
+        # Initial connect/state-query is triggered once from
+        # __init__.py::async_setup_entry (shared by all platforms), not here.
 
     @callback
     def _handle_coordinator_update(self) -> None:
