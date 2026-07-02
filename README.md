@@ -15,6 +15,7 @@ Controls Govee lighting from Home Assistant over local LAN or direct BLE. No clo
 - Local Wi-Fi (LAN) control for supported devices, no cloud
 - Full scene list sourced from the Govee API and cached locally
 - Brightness, color, and power state
+- Hardened BLE reliability: passive advertisement decoding keeps on/off state live without a connection (H617A/H617C), bounded connect/disconnect timeouts, redundant power commands, and a connection cap for ESPHome Bluetooth proxy setups — see [GOVEE_BLE.md](GOVEE_BLE.md) for details
 
 ---
 
@@ -92,6 +93,8 @@ Report bugs or missing device support in the [issue tracker](https://github.com/
 - [@Laserology](https://github.com/Laserology/govee_ble_lights) — original BLE implementation and model reverse-engineering, which this integration's BLE code is based on
 - [@teh-hippo](https://github.com/teh-hippo/govee_ble_lights) — independent BLE implementation, particularly useful for H6199 and state-reading
 - [@wez](https://github.com/wez/govee2mqtt) — govee2mqtt's LAN protocol work and scene handling saved a lot of guesswork here
+- [@alex4108](https://github.com/alex4108/govee_ble_lights) — reliability-hardening techniques from their ESPHome-proxy stress testing: passive advertisement-based power state, bounded connect/disconnect timeouts, POWER packet redundancy, post-command compare-and-retry, and GATT connection concurrency capping
+- [timniklas/hass-govee_light_ble](https://github.com/timniklas/hass-govee_light_ble) — origin of the repeated-POWER-packet pattern for write-without-response reliability
 
 ---
 

@@ -77,7 +77,9 @@ GoveeBLECoordinator  →  brc.establish_connection(BleakClient, ble_device, addr
                              disconnected_callback=_handle_ble_disconnect)
 ```
 
-`bleak_retry_connector` handles per-attempt timeouts, backoff and service-cache validation internally, up to 4 attempts.
+`bleak_retry_connector` handles per-attempt timeouts, backoff and service-cache validation internally, up to 4 attempts. The whole call is bounded to 15 s (`BLE_CONNECT_TIMEOUT`) so a wedged connect can't block queued commands indefinitely; a timeout is raised as `BleakError` and falls into the normal retry path (§5.1).
+
+Connect attempts are also gated by a process-wide semaphore (`BLE_MAX_CONCURRENT_CONNECTS`, default 2) covering all Govee BLE devices in this HA instance. Only `establish_connection()` itself is gated — writes on an already-open connection are not — so a scene activating many bulbs at once can't open more than 2 new GATT sessions in parallel and stall an ESPHome BLE proxy. Set to `0` to disable.
 
 ### 1.3 Subscribe to notifications
 
@@ -101,6 +103,16 @@ device  →  HA  NOTIFY:  AA 05 <mode> <r> <g> <b> …
 
 > **Race condition note**: on a fresh connect the initial state queries are sent *before* the triggering command is dispatched. The query responses therefore reflect the **pre-command** device state and will overwrite the entity's optimistic state update when they arrive (~100–200 ms later). A post-command state query (§2.9) corrects this.
 
+### 1.5 Passive power-state decoding (advertisement-only)
+
+For models in `ADVERT_STATE_MODELS` (H617A, H617C), a second, permanent callback decodes on/off state directly from the device's advertisement — no GATT connection required:
+
+```
+device advertisement manufacturer data:  ec 00 0a 01 <state>   (01 = on, 00 = off)
+```
+
+The prefix is matched across *all* `manufacturer_data` values rather than a fixed manufacturer id, since it has been observed to flip (e.g. between `0x0288`/`0x0388`, or other values entirely). This callback is registered `PASSIVE` (no extra scanning) and runs for the coordinator's whole lifetime, independent of the reconnect watcher in §5.3 — so `is_on` and availability stay live even while idle-disconnected, e.g. after the Govee app or a physical remote toggles the bulb. On `async_setup()`, `bluetooth.async_last_service_info(connectable=False)` seeds this state once from the last-seen advert, so it's correct immediately after an HA restart, before the GATT connection completes.
+
 ---
 
 ## 2. Commands
@@ -109,14 +121,16 @@ All commands are sent via `WRITE_WITHOUT_RESPONSE` to `CONTROL_UUID`.
 
 ### 2.1 Power on
 
+Sent 3× per session (`BLE_POWER_PACKET_REPEAT`) since `WRITE_WITHOUT_RESPONSE` has no ACK — a single dropped POWER packet is the one state mismatch users always notice, and repeating it within the same connection costs no extra GATT churn:
+
 ```
-HA  →  device:  33 01 01 00 … <chk>
+HA  →  device:  33 01 01 00 … <chk>   (×3, 50 ms apart)
 ```
 
 ### 2.2 Power off
 
 ```
-HA  →  device:  33 01 00 00 … <chk>
+HA  →  device:  33 01 00 00 … <chk>   (×3, 50 ms apart)
 ```
 
 ### 2.3 Brightness
@@ -201,6 +215,8 @@ t=630ms post-command responses arrive → notify_callback fires → is_on = True
 
 On reused connections (§4) there is no initial query, so the post-command query also serves as the only state confirmation (Govee devices do not echo `0x33` commands as unsolicited `0xAA` notifications).
 
+For power commands specifically, the query result is also compared against what was commanded (`expected_power`): if they disagree, the POWER packet is re-sent once more (logged at INFO). This catches the rare case where all 3 packets from §2.1/§2.2 were lost.
+
 ---
 
 ### 2.10 Multi-packet segmented burst (legacy helper)
@@ -256,7 +272,7 @@ Subsequent bytes depend on `mode`:
 ## 4. Idle disconnect
 
 After the last write AND its post-command state query return, a 5-second idle timer is (re)started.  
-When it expires: `BleakClient.disconnect()` → `_client = None`.  
+When it expires: `BleakClient.disconnect()` → `_client = None`. The disconnect call is bounded to 3 s (`BLE_DISCONNECT_TIMEOUT`); on timeout the client is abandoned anyway and a warning is logged.  
 No `_available = False` is set; the device is just disconnected at the GATT level. The next command reconnects transparently.
 
 ---
@@ -294,6 +310,8 @@ HA scanner  →  advertisement from device
 ```
 
 The watcher is a no-op if the device is already available or connected.
+
+This `ACTIVE` reconnect watcher is separate from the passive power-state callback in §1.5, which stays registered permanently (for `ADVERT_STATE_MODELS`) and doesn't itself trigger a reconnect.
 
 ---
 

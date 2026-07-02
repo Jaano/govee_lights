@@ -51,15 +51,31 @@ BLE_MUSIC_MODES: dict[str, int] = {
     "Music mode - Rolling": 0x06,
 }
 
+# Models known to broadcast on/off state as `ec 00 0a 01 <state>` in adverts.
+ADVERT_STATE_MODELS: set[str] = {"H617A", "H617C"}
+_ADVERT_POWER_STATE_PREFIX: bytes = bytes([0xEC, 0x00, 0x0A, 0x01])
+
 # ── Timing constants ────────────────────────────────────────────────────────
 BLE_QUERY_RESPONSE_TIMEOUT: float = 3.0  # seconds to wait for a state-query notification
 BLE_INTER_FRAME_DELAY: float = 0.05  # seconds between consecutive BLE frames
 BLE_CONNECT_ATTEMPTS: int = 3  # max connection attempts before raising
+# Write-without-response has no ACK, so repeat POWER to cut the miss odds.
+BLE_POWER_PACKET_REPEAT: int = 3
+# bleak_retry_connector has no total time budget; bound both so a wedged
+# connect/disconnect can't block every queued command.
+BLE_CONNECT_TIMEOUT: float = 15.0  # seconds to wait for establish_connection()
+BLE_DISCONNECT_TIMEOUT: float = 3.0  # seconds to wait for client.disconnect()
 
 # Coordinator internals
 _DISCONNECT_DELAY_SECONDS: int = 5  # idle seconds before auto-disconnect after last command
 _RETRY_BACKOFF_SECONDS: float = 2.0
 _DEVICE_DISCOVERY_RETRIES: int = 4
+
+# Caps concurrent connect attempts across all devices - too many parallel
+# connects can stall ESPHome BLE proxies. Only gates establish_connection(),
+# not writes on an already-open connection. 0 = unlimited.
+BLE_MAX_CONCURRENT_CONNECTS: int = 2
+_connect_semaphore = asyncio.Semaphore(BLE_MAX_CONCURRENT_CONNECTS or 1)
 
 # ── Pre-built state-query frames ─────────────────────────────────────────
 def _make_query_frame(cmd: int) -> bytes:
@@ -75,7 +91,6 @@ BLE_QUERY_COLOR_MODE = _make_query_frame(0x05)
 
 
 # ── GoveeBLE - low-level static helpers ─────────────────────────────────────
-
 
 class GoveeBLE(GoveeHelper):
     """Static helper class for Govee BLE packet construction and low-level I/O."""
@@ -335,6 +350,10 @@ class GoveeBLECoordinator(GoveeCoordinator):
     advertisement watcher is registered via bluetooth.async_register_callback so
     that the connection is re-established as soon as the device is seen again by
     the HA scanner, without requiring a restart.
+
+    For models in ADVERT_STATE_MODELS, a permanent PASSIVE callback also
+    decodes on/off from advertisement data, keeping is_on/availability live
+    without an open GATT connection.
     """
 
     def __init__(self, hass: HomeAssistant, address: str, model: str) -> None:
@@ -357,12 +376,22 @@ class GoveeBLECoordinator(GoveeCoordinator):
         self._unsub_stop: CALLBACK_TYPE | None = hass.bus.async_listen_once(
             EVENT_HOMEASSISTANT_STOP, self._handle_hass_stop
         )
-        # Passive availability tracking: HA's bluetooth manager fires this
-        # when no scanner has seen an advertisement for a while, independent
-        # of whether we have ever tried to connect/send a command.
+        # Fires when no scanner has seen an advertisement in a while.
         self._unsub_unavailable: CALLBACK_TYPE | None = bluetooth.async_track_unavailable(
             hass, self._handle_ble_unavailable, address.upper(), connectable=True
         )
+
+        # Decodes on/off from adverts for the coordinator's whole lifetime
+        # (separate from the reconnect watcher), so state tracks reality even
+        # while idle-disconnected. PASSIVE mode triggers no extra scanning.
+        self._unsub_advert_state: CALLBACK_TYPE | None = None
+        if self.model in ADVERT_STATE_MODELS:
+            self._unsub_advert_state = bluetooth.async_register_callback(
+                hass,
+                self._handle_advert_state,
+                bluetooth.BluetoothCallbackMatcher(address=address.upper()),
+                bluetooth.BluetoothScanningMode.PASSIVE,
+            )
 
     # ── Public coordinator interface ─────────────────────────────────────────
 
@@ -424,7 +453,50 @@ class GoveeBLECoordinator(GoveeCoordinator):
         if self._unsub_unavailable:
             self._unsub_unavailable()
             self._unsub_unavailable = None
+        if self._unsub_advert_state:
+            self._unsub_advert_state()
+            self._unsub_advert_state = None
         self._clear_repair_issue(self._issue_key)
+
+    @callback
+    def _handle_advert_state(
+        self,
+        service_info: bluetooth.BluetoothServiceInfoBleak,
+        _change: bluetooth.BluetoothChange,
+    ) -> None:
+        """Decode on/off from a passively-observed advert; also drives availability.
+
+        Fires regardless of connection state, so external power changes (app,
+        remote, power blip) show up without waiting for the next command.
+        """
+        self._apply_advert_state(service_info)
+
+    def _apply_advert_state(self, service_info: bluetooth.BluetoothServiceInfoBleak) -> None:
+        """Update is_on/availability from a service_info's manufacturer data, if decodable."""
+        _LOGGER.debug("advert from %s: %s", service_info.address, service_info.manufacturer_data)
+        state = self._decode_advert_power_state(service_info)
+        if state is None:
+            return
+        changed = state != self.is_on or not self._available
+        self.is_on = state
+        self._available = True
+        if changed:
+            self.async_set_updated_data(self._state_snapshot())
+
+    @staticmethod
+    def _decode_advert_power_state(
+        service_info: bluetooth.BluetoothServiceInfoBleak,
+    ) -> bool | None:
+        """Return decoded on/off state from manufacturer data, or None if absent.
+
+        Matches the prefix across all values rather than a fixed manufacturer
+        id, since Govee's adverts have been observed to flip ids.
+        """
+        prefix_len = len(_ADVERT_POWER_STATE_PREFIX)
+        for data in service_info.manufacturer_data.values():
+            if len(data) > prefix_len and data.startswith(_ADVERT_POWER_STATE_PREFIX):
+                return data[prefix_len] == 0x01
+        return None
 
     @callback
     def _handle_ble_unavailable(
@@ -439,6 +511,14 @@ class GoveeBLECoordinator(GoveeCoordinator):
 
     async def async_setup(self) -> None:
         """Connect to the device and query initial state. Safe to call from a background task."""
+        if self.model in ADVERT_STATE_MODELS:
+            # Seed is_on from the last-seen advert so it's correct right after
+            # an HA restart, before the GATT connection below completes.
+            last_service_info = bluetooth.async_last_service_info(
+                self.hass, self.address.upper(), connectable=False
+            )
+            if last_service_info is not None:
+                self._apply_advert_state(last_service_info)
         try:
             await self._ensure_connected()
             self._cancel_advertisement_watcher()
@@ -466,10 +546,14 @@ class GoveeBLECoordinator(GoveeCoordinator):
         self._effect_list = effect_list
 
     async def async_turn_on(self) -> None:
-        await self.send_command(GoveeBLE.build_single_packet(GoveeBLE.LEDCommand.POWER, [0x1]))
+        # Sent BLE_POWER_PACKET_REPEAT times: write-without-response has no ACK,
+        # so a single dropped POWER packet is the miss users notice most.
+        packet = GoveeBLE.build_single_packet(GoveeBLE.LEDCommand.POWER, [0x1])
+        await self.send_commands([packet] * BLE_POWER_PACKET_REPEAT, expected_power=True)
 
     async def async_turn_off(self) -> None:
-        await self.send_command(GoveeBLE.build_single_packet(GoveeBLE.LEDCommand.POWER, [0x0]))
+        packet = GoveeBLE.build_single_packet(GoveeBLE.LEDCommand.POWER, [0x0])
+        await self.send_commands([packet] * BLE_POWER_PACKET_REPEAT, expected_power=False)
 
     async def async_set_brightness(self, brightness: int) -> None:
         """Set brightness. brightness is HA scale (0-255)."""
@@ -604,10 +688,22 @@ class GoveeBLECoordinator(GoveeCoordinator):
             )
 
         _LOGGER.debug("Connecting to %s (%s)", self.model, self.address)
-        self._client = await brc.establish_connection(
-            BleakClient, ble_device, self.address,
-            disconnected_callback=self._handle_ble_disconnect,
+        connect_gate = (
+            _connect_semaphore if BLE_MAX_CONCURRENT_CONNECTS else contextlib.nullcontext()
         )
+        try:
+            async with connect_gate:
+                self._client = await asyncio.wait_for(
+                    brc.establish_connection(
+                        BleakClient, ble_device, self.address,
+                        disconnected_callback=self._handle_ble_disconnect,
+                    ),
+                    timeout=BLE_CONNECT_TIMEOUT,
+                )
+        except TimeoutError as err:
+            raise BleakError(
+                f"Connecting to {self.address} timed out after {BLE_CONNECT_TIMEOUT}s"
+            ) from err
         _LOGGER.debug("Connected to %s (%s)", self.model, self.address)
 
         if self._client.services.get_characteristic(BLE_UUID_CONTROL_CHARACTERISTIC) is None:
@@ -765,35 +861,58 @@ class GoveeBLECoordinator(GoveeCoordinator):
         except BleakError:
             return False
 
-    async def _query_state_after_command(self) -> None:
-        """Wait briefly then query state to confirm a command took effect.
+    async def _query_state_after_command(self, expected_power: bool | None = None) -> None:
+        """Query state 0.5 s after a command to confirm it took effect.
 
-        On a fresh connection, _send_state_queries() fires *before* the actual
-        command packet is written, so its responses reflect the pre-command state
-        and briefly overwrite any optimistic UI update.  By querying again 0.5 s
-        after the command we always end up with the correct post-command state,
-        even when the device does not echo the command as an unsolicited 0xAA
-        notification.
+        Corrects any pre-command snapshot left by _send_state_queries() on a
+        fresh connection. If expected_power is given, also compares the result
+        and re-sends POWER once on a mismatch (write-without-response has no ACK).
         """
         await asyncio.sleep(0.5)
         async with self._lock:
-            await self._send_state_queries()
+            queried = await self._send_state_queries()
+
+        if expected_power is None or not queried:
+            return
+
+        # Let the notification response arrive before comparing.
+        await asyncio.sleep(0.3)
+        if self.is_on != expected_power:
+            _LOGGER.info(
+                "%s (%s): POWER command not confirmed (wanted %s, device reports %s) - retrying",
+                self.model, self.address, expected_power, self.is_on,
+            )
+            with contextlib.suppress(BleakError):
+                await self.send_command(
+                    GoveeBLE.build_single_packet(
+                        GoveeBLE.LEDCommand.POWER, [0x1 if expected_power else 0x0]
+                    )
+                )
 
     # ── Command dispatch ──────────────────────────────────────────────────────
 
-    async def send_command(self, packet: bytes) -> None:
+    async def send_command(self, packet: bytes, *, expected_power: bool | None = None) -> None:
         """Send a single BLE packet, ensuring a live connection."""
         async with self._lock:
-            await self._dispatch([packet])
+            await self._dispatch([packet], expected_power=expected_power)
 
     async def send_commands(
-        self, packets: list[bytes | bytearray], delay: float = BLE_INTER_FRAME_DELAY
+        self,
+        packets: list[bytes | bytearray],
+        delay: float = BLE_INTER_FRAME_DELAY,
+        *,
+        expected_power: bool | None = None,
     ) -> None:
         """Send multiple BLE packets with an inter-frame delay, under a single lock."""
         async with self._lock:
-            await self._dispatch(packets, delay=delay)
+            await self._dispatch(packets, delay=delay, expected_power=expected_power)
 
-    async def _dispatch(self, packets: list[bytes | bytearray], delay: float = 0.0) -> None:
+    async def _dispatch(
+        self,
+        packets: list[bytes | bytearray],
+        delay: float = 0.0,
+        expected_power: bool | None = None,
+    ) -> None:
         """Internal: write packets to the device with retry on connection errors."""
         for attempt in range(BLE_CONNECT_ATTEMPTS):
             try:
@@ -809,10 +928,9 @@ class GoveeBLECoordinator(GoveeCoordinator):
                 if not self._available:
                     self._available = True
                     self.async_set_updated_data(self._state_snapshot())
-                # Query state after command so HA reflects the new device state,
-                # correcting any stale snapshot from the pre-command initial query.
+                # Confirm the command took effect and refresh HA's state.
                 self.hass.async_create_background_task(
-                    self._query_state_after_command(),
+                    self._query_state_after_command(expected_power=expected_power),
                     f"govee_ble_state_verify_{self.address}",
                 )
                 return
@@ -845,7 +963,14 @@ class GoveeBLECoordinator(GoveeCoordinator):
 
     async def _disconnect_client(self) -> None:
         if self._client and self._client.is_connected:
-            with contextlib.suppress(BleakError):
-                await self._client.disconnect()
+            try:
+                await asyncio.wait_for(self._client.disconnect(), timeout=BLE_DISCONNECT_TIMEOUT)
+            except TimeoutError:
+                _LOGGER.warning(
+                    "Disconnect from %s (%s) timed out after %ds; abandoning stale client",
+                    self.model, self.address, BLE_DISCONNECT_TIMEOUT,
+                )
+            except BleakError:
+                pass
             _LOGGER.debug("Disconnected from %s (%s)", self.model, self.address)
         self._client = None
