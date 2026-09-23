@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from homeassistant.components import bluetooth
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
     ATTR_COLOR_TEMP_KELVIN,
@@ -22,6 +23,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.restore_state import RestoreEntity
 
 from .const import CONF_LAN_SKU, DOMAIN
+from .models import get_segment_count, is_segmented_model
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -71,6 +73,32 @@ class GoveeLight(LightEntity, RestoreEntity):
         self._attr_effect: str | None = None
         self._attr_effect_list: list[str] | None = None
         self._attr_available = False
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Diagnostic attributes for automations and support."""
+        attrs: dict[str, Any] = {"govee_model": self._device_label}
+
+        if is_segmented_model(self._device_label):
+            attrs["govee_segments"] = get_segment_count(self._device_label)
+
+        rssi = self._rssi()
+        if rssi is not None:
+            attrs["govee_rssi"] = rssi
+
+        return attrs
+
+    def _rssi(self) -> int | None:
+        """Return the last reported RSSI for a BLE device, if known.
+
+        LAN coordinators have no ``address`` attribute (govee-local-api's UDP
+        transport has no RSSI concept), so this is naturally BLE-only.
+        """
+        address = getattr(self._coordinator, "address", None)
+        if address is None:
+            return None
+        info = bluetooth.async_last_service_info(self.hass, address.upper(), True)
+        return info.rssi if info is not None else None
 
     async def async_added_to_hass(self) -> None:
         _LOGGER.debug("Loading effect list for %s", self._device_label)

@@ -20,22 +20,10 @@ from .const import (
 )
 from .govee_ble import GoveeBLE
 from .govee_lan import GoveeLANCoordinator
+from .models import detect_model
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigFlowResult
-
-
-def _model_from_ble_name(name: str) -> str:
-    """Extract the model number from a Govee BLE device name.
-
-    Device names follow the pattern '<prefix>_<MODEL>_<suffix>',
-    e.g. 'Govee_H617C_5E1B', 'GBK_H6076B_AA01', 'ihoment_H617C_3C2D'.
-    Returns the middle segment, or an empty string if the pattern doesn't match.
-    """
-    parts = name.split("_")
-    if len(parts) >= 3:
-        return parts[1]
-    return ""
 
 
 class GoveeConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -70,7 +58,7 @@ class GoveeConfigFlow(ConfigFlow, domain=DOMAIN):
         assert self._discovery_info is not None
         discovery_info = self._discovery_info
         title = discovery_info.name
-        inferred_model = _model_from_ble_name(title)
+        inferred_model = detect_model(title) or ""
         placeholders: dict[str, str] = {"name": title, "model": inferred_model or "Device model"}
         self.context["title_placeholders"] = placeholders
         errors: dict[str, str] = {}
@@ -134,9 +122,7 @@ class GoveeConfigFlow(ConfigFlow, domain=DOMAIN):
         preselected_address = (user_input or {}).get(CONF_ADDRESS, "")
         if not preselected_address and self._discovered_devices:
             preselected_address = next(iter(self._discovered_devices))
-        inferred_model = _model_from_ble_name(
-            self._discovered_devices.get(preselected_address, "")
-        )
+        inferred_model = detect_model(self._discovered_devices.get(preselected_address, "")) or ""
 
         return self.async_show_form(
             step_id="ble",

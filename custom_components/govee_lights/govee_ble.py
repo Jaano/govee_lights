@@ -35,6 +35,12 @@ if TYPE_CHECKING:
 
     from bleak.backends.device import BLEDevice
 from .govee import GoveeHelper
+from .models import (
+    has_advert_state,
+    is_segmented_model,
+    uses_colour_d_mode,
+    uses_percent_brightness,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -42,8 +48,6 @@ _LOGGER = logging.getLogger(__name__)
 BLE_UUID_CONTROL_CHARACTERISTIC: str = "00010203-0405-0607-0809-0a0b0c0d2b11"
 BLE_UUID_NOTIFY_CHARACTERISTIC: str = "00010203-0405-0607-0809-0a0b0c0d2b10"
 
-# ── Model feature flags ─────────────────────────────────────────────────────
-# (Model capability lists are defined on GoveeHelper in govee.py.)
 BLE_MUSIC_MODES: dict[str, int] = {
     "Music mode - Energic": 0x05,
     "Music mode - Rhythm": 0x03,
@@ -51,8 +55,6 @@ BLE_MUSIC_MODES: dict[str, int] = {
     "Music mode - Rolling": 0x06,
 }
 
-# Models known to broadcast on/off state as `ec 00 0a 01 <state>` in adverts.
-ADVERT_STATE_MODELS: set[str] = {"H617A", "H617C"}
 _ADVERT_POWER_STATE_PREFIX: bytes = bytes([0xEC, 0x00, 0x0A, 0x01])
 
 # ── Timing constants ────────────────────────────────────────────────────────
@@ -351,8 +353,8 @@ class GoveeBLECoordinator(GoveeCoordinator):
     that the connection is re-established as soon as the device is seen again by
     the HA scanner, without requiring a restart.
 
-    For models in ADVERT_STATE_MODELS, a permanent PASSIVE callback also
-    decodes on/off from advertisement data, keeping is_on/availability live
+    For models where the registry sets ``advert_state``, a permanent PASSIVE
+    callback also decodes on/off from advertisement data, keeping is_on/availability live
     without an open GATT connection.
     """
 
@@ -385,7 +387,7 @@ class GoveeBLECoordinator(GoveeCoordinator):
         # (separate from the reconnect watcher), so state tracks reality even
         # while idle-disconnected. PASSIVE mode triggers no extra scanning.
         self._unsub_advert_state: CALLBACK_TYPE | None = None
-        if self.model in ADVERT_STATE_MODELS:
+        if has_advert_state(self.model):
             self._unsub_advert_state = bluetooth.async_register_callback(
                 hass,
                 self._handle_advert_state,
@@ -428,7 +430,7 @@ class GoveeBLECoordinator(GoveeCoordinator):
     @property
     def brightness(self) -> int:
         """Brightness in HA scale (0-255)."""
-        if self.model in GoveeBLE.PERCENT_MODELS:
+        if uses_percent_brightness(self.model):
             return round(self.brightness_raw * 255 / 100)
         return self.brightness_raw
 
@@ -447,8 +449,18 @@ class GoveeBLECoordinator(GoveeCoordinator):
             return reverse.get(self.music_mode_id)
         return None
 
+    @property
+    def is_connected(self) -> bool:
+        """Whether a live GATT connection is currently held."""
+        return self._client is not None and self._client.is_connected
+
     def cleanup(self) -> None:
-        """Cancel the advertisement watcher and unavailable tracker, if active."""
+        """Cancel watchers/timers and disconnect, if connected.
+
+        A live BLE connection left open across an unload/reload holds the
+        device's one connection slot, so the replacement coordinator's first
+        connect attempt fails until this one lets go.
+        """
         self._cancel_advertisement_watcher()
         if self._unsub_unavailable:
             self._unsub_unavailable()
@@ -456,6 +468,16 @@ class GoveeBLECoordinator(GoveeCoordinator):
         if self._unsub_advert_state:
             self._unsub_advert_state()
             self._unsub_advert_state = None
+        if self._unsub_stop:
+            self._unsub_stop()
+            self._unsub_stop = None
+        if self._cancel_disconnect:
+            self._cancel_disconnect()
+            self._cancel_disconnect = None
+        if self._client is not None:
+            self.hass.async_create_background_task(
+                self.disconnect(), f"govee_lights_cleanup_disconnect_{self.address}"
+            )
         self._clear_repair_issue(self._issue_key)
 
     @callback
@@ -511,7 +533,7 @@ class GoveeBLECoordinator(GoveeCoordinator):
 
     async def async_setup(self) -> None:
         """Connect to the device and query initial state. Safe to call from a background task."""
-        if self.model in ADVERT_STATE_MODELS:
+        if has_advert_state(self.model):
             # Seed is_on from the last-seen advert so it's correct right after
             # an HA restart, before the GATT connection below completes.
             last_service_info = bluetooth.async_last_service_info(
@@ -557,12 +579,12 @@ class GoveeBLECoordinator(GoveeCoordinator):
 
     async def async_set_brightness(self, brightness: int) -> None:
         """Set brightness. brightness is HA scale (0-255)."""
-        val = round(brightness * 100 / 255) if self.model in GoveeBLE.PERCENT_MODELS else brightness
+        val = round(brightness * 100 / 255) if uses_percent_brightness(self.model) else brightness
         await self.send_command(GoveeBLE.build_single_packet(GoveeBLE.LEDCommand.BRIGHTNESS, [val]))
 
     async def async_set_rgb_color(self, r: int, g: int, b: int) -> None:
         self.color_temp_kelvin = None
-        if self.model in GoveeBLE.SEGMENTED_MODELS:
+        if is_segmented_model(self.model):
             packet = GoveeBLE.build_single_packet(
                 GoveeBLE.LEDCommand.COLOR,
                 [GoveeBLE.LEDMode.SEGMENTS, 0x01, r, g, b,
@@ -587,7 +609,7 @@ class GoveeBLECoordinator(GoveeCoordinator):
         r, g, b = GoveeBLE.kelvin_to_rgb(kelvin)
         mode_byte = (
             GoveeBLE.LEDMode.COLOUR_D
-            if self.model in GoveeBLE.COLOUR_D_MODELS
+            if uses_colour_d_mode(self.model)
             else GoveeBLE.LEDMode.MANUAL
         )
         packet = GoveeBLE.build_single_packet(

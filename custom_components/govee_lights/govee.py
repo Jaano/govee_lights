@@ -17,20 +17,11 @@ import requests
 _LOGGER = logging.getLogger(__name__)
 
 _GOVEE_SCENE_DOWNLOAD_TIMEOUT: int = 10  # seconds for scene data HTTP requests
+_GOVEE_APP_VERSION: str = "6.5.02"
 
 
 class GoveeHelper:
     """Generic Govee helpers: scene download, parsing, and effect list building."""
-
-    # ── Model capability flags ───────────────────────────────────────────────
-    # Models that encode RGB colour in a segmented SEGMENTS (0x15 0x01 …) BLE packet format.
-    SEGMENTED_MODELS: list[str] = [
-        "H6053", "H6072", "H6102", "H6199", "H617A", "H617C", "H617E", "H618C",
-    ]
-    # Models that express brightness as a 0-100 percentage rather than 0-255.
-    PERCENT_MODELS: list[str] = ["H613A", "H617A", "H617C", "H618C", "H6199"]
-    # Models that use mode byte 0x0D instead of 0x02 for colour/CT BLE packets.
-    COLOUR_D_MODELS: list[str] = ["H6005", "H6052", "H6058", "H6102", "H613B", "H613D", "H617E"]
 
     @staticmethod
     def build_ptreal_cmds(scene_code: int, scence_param: str) -> list[str]:
@@ -102,9 +93,10 @@ class GoveeHelper:
         save it to {config_dir}/.storage/govee_lights/{model}.json, and return parsed scenes."""
         url = f"https://app2.govee.com/appsku/v1/light-effect-libraries?sku={model}"
         headers = {
-            "AppVersion": "5.6.01",
+            "AppVersion": _GOVEE_APP_VERSION,
             "User-Agent": (
-                "GoveeHome/5.6.01 (com.ihoment.GoVeeSensor; build:2; iOS 16.5.0) Alamofire/5.6.4"
+                f"GoveeHome/{_GOVEE_APP_VERSION} "
+                "(com.ihoment.GoVeeSensor; build:2; iOS 16.5.0) Alamofire/5.6.4"
             ),
         }
         _LOGGER.info("Downloading scene data for %s from Govee API", model)

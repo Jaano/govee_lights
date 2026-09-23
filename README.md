@@ -56,8 +56,8 @@ The integration accepts two formats:
 
 ```bash
 curl -s 'https://app2.govee.com/appsku/v1/light-effect-libraries?sku=H617C' \
-  -H 'AppVersion: 5.6.01' \
-  -H 'User-Agent: GoveeHome/5.6.01 (com.ihoment.GoVeeSensor; build:2; iOS 16.5.0) Alamofire/5.6.4' \
+  -H 'AppVersion: 6.5.02' \
+  -H 'User-Agent: GoveeHome/6.5.02 (com.ihoment.GoVeeSensor; build:2; iOS 16.5.0) Alamofire/5.6.4' \
   -o 'config/.storage/govee_lights/H617C.json'
 ```
 
@@ -90,7 +90,8 @@ Report bugs or missing device support in the [issue tracker](https://github.com/
 ## Credits
 
 - [@cralex96](https://github.com/cralex96) and [@Rombond](https://github.com/Rombond) — original BLE patches this integration grew from
-- [@Laserology](https://github.com/Laserology/govee_ble_lights) — original BLE implementation and model reverse-engineering, which this integration's BLE code is based on
+- [@Laserology](https://github.com/Laserology/govee_ble_lights) — original BLE implementation and model reverse-engineering, which this integration's BLE code is based on; also the source of the per-model quirk registry (`models.py`) and diagnostics support
+- [@MineNights](https://github.com/MineNights/govee_lights) — H617E's brightness-as-percentage quirk fix, confirmed against real hardware
 - [@teh-hippo](https://github.com/teh-hippo/govee_ble_lights) — independent BLE implementation, particularly useful for H6199 and state-reading
 - [@wez](https://github.com/wez/govee2mqtt) — govee2mqtt's LAN protocol work and scene handling saved a lot of guesswork here
 - [@alex4108](https://github.com/alex4108/govee_ble_lights) — reliability-hardening techniques from their ESPHome-proxy stress testing: passive advertisement-based power state, bounded connect/disconnect timeouts, POWER packet redundancy, post-command compare-and-retry, and GATT connection concurrency capping
