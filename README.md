@@ -90,7 +90,7 @@ Report bugs or missing device support in the [issue tracker](https://github.com/
 ## Credits
 
 - [@cralex96](https://github.com/cralex96) and [@Rombond](https://github.com/Rombond) — original BLE patches this integration grew from
-- [@Laserology](https://github.com/Laserology/govee_ble_lights) — original BLE implementation and model reverse-engineering, which this integration's BLE code is based on; also the source of the per-model quirk registry (`models.py`) and diagnostics support
+- [@Laserology](https://github.com/Laserology/govee_ble_lights) — original BLE implementation and model reverse-engineering, which this integration's BLE code is based on; also the source of the per-model quirk registry (`models.py`), diagnostics support, and the SEGMENT (0xA5) state-query/notification handling segmented models need for colour read-back
 - [@MineNights](https://github.com/MineNights/govee_lights) — H617E's brightness-as-percentage quirk fix, confirmed against real hardware
 - [@teh-hippo](https://github.com/teh-hippo/govee_ble_lights) — independent BLE implementation, particularly useful for H6199 and state-reading
 - [@wez](https://github.com/wez/govee2mqtt) — govee2mqtt's LAN protocol work and scene handling saved a lot of guesswork here

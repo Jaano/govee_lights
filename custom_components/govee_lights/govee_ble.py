@@ -80,8 +80,8 @@ BLE_MAX_CONCURRENT_CONNECTS: int = 2
 _connect_semaphore = asyncio.Semaphore(BLE_MAX_CONCURRENT_CONNECTS or 1)
 
 # ── Pre-built state-query frames ─────────────────────────────────────────
-def _make_query_frame(cmd: int) -> bytes:
-    frame = bytes([0xAA, cmd]) + bytes(17)
+def _make_query_frame(cmd: int, payload: bytes = b"") -> bytes:
+    frame = bytes([0xAA, cmd]) + payload + bytes(17 - len(payload))
     chk = 0
     for b in frame:
         chk ^= b
@@ -90,6 +90,7 @@ def _make_query_frame(cmd: int) -> bytes:
 BLE_QUERY_POWER = _make_query_frame(0x01)
 BLE_QUERY_BRIGHTNESS = _make_query_frame(0x04)
 BLE_QUERY_COLOR_MODE = _make_query_frame(0x05)
+BLE_QUERY_SEGMENT_COLOR = _make_query_frame(0xA5, b"\x01")
 
 
 # ── GoveeBLE - low-level static helpers ─────────────────────────────────────
@@ -101,6 +102,7 @@ class GoveeBLE(GoveeHelper):
         POWER = 0x01
         BRIGHTNESS = 0x04
         COLOR = 0x05
+        SEGMENT = 0xA5
 
     class LEDMode(IntEnum):
         MANUAL = 0x02
@@ -436,8 +438,20 @@ class GoveeBLECoordinator(GoveeCoordinator):
 
     @property
     def current_rgb_color(self) -> tuple[int, int, int] | None:
-        """RGB color to display — None when not in a plain-colour mode."""
-        if self.mode not in (GoveeBLE.LEDMode.MANUAL, GoveeBLE.LEDMode.COLOUR_D):
+        """RGB color to display — None when not in a plain-colour mode.
+
+        SEGMENTS is included because segmented models report that mode for
+        an ordinary whole-strip colour (async_set_rgb_color sends a SEGMENTS
+        packet for them); without it, a segmented model's rgb_color never
+        reaches the entity even though it's correctly tracked here (found
+        2026-09-25 verifying 2.1 against a real H617C: mode=SEGMENTS,
+        rgb_color populated internally, entity attribute stuck at None).
+        """
+        if self.mode not in (
+            GoveeBLE.LEDMode.MANUAL,
+            GoveeBLE.LEDMode.COLOUR_D,
+            GoveeBLE.LEDMode.SEGMENTS,
+        ):
             return None
         return self.rgb_color
 
@@ -836,12 +850,18 @@ class GoveeBLECoordinator(GoveeCoordinator):
                 self.mode = payload[0]
                 if self.mode == GoveeBLE.LEDMode.MUSIC and len(payload) >= 2:
                     self.music_mode_id = payload[1]
-                elif (
-                    self.mode == GoveeBLE.LEDMode.SEGMENTS
-                    and len(payload) >= 5
-                    and payload[1] == 0x01
-                ):
-                    self.rgb_color = (payload[2], payload[3], payload[4])
+                # SEGMENTS mode: nothing to do here beyond setting self.mode
+                # above. This domain's SEGMENTS-mode response was previously
+                # (mis)read for colour too (payload[2:5]), but verified
+                # against a real H617C (2026-09-25) to return (0, 0, 0) -
+                # garbage - while the dedicated SEGMENT (0xA5) query/response
+                # (see BLE_QUERY_SEGMENT_COLOR / _notify_callback's SEGMENT
+                # branch) returns the device's real colour. The two used to
+                # race for self.rgb_color, landing on the right value only
+                # because 0xA5 is queried after 0x05 and its response
+                # happened to arrive last - fragile, and silently wrong if
+                # that ordering ever changed. Colour for segmented models
+                # now comes exclusively from the SEGMENT domain.
                 elif (
                     self.mode in (GoveeBLE.LEDMode.MANUAL, GoveeBLE.LEDMode.COLOUR_D)
                     and len(payload) >= 4
@@ -861,6 +881,12 @@ class GoveeBLECoordinator(GoveeCoordinator):
                     else:
                         self.rgb_color = (payload[1], payload[2], payload[3])
                         self.color_temp_kelvin = None  # device is in plain RGB mode
+            elif domain == GoveeBLE.LEDCommand.SEGMENT and len(payload) >= 5:
+                # Segmented models' answer to BLE_QUERY_SEGMENT_COLOR (0xA5);
+                # layout matches Laserology/govee_ble_lights' SEGMENT parsing
+                # (payload[0:2] unused here - likely a segment index echo).
+                self.rgb_color = (payload[2], payload[3], payload[4])
+                self.color_temp_kelvin = None  # segment colour implies plain RGB mode
             if not self._available:
                 self._available = True
             self.async_set_updated_data(self._state_snapshot())
@@ -879,6 +905,13 @@ class GoveeBLECoordinator(GoveeCoordinator):
             await w(BLE_UUID_CONTROL_CHARACTERISTIC, BLE_QUERY_POWER, response=False)
             await w(BLE_UUID_CONTROL_CHARACTERISTIC, BLE_QUERY_BRIGHTNESS, response=False)
             await w(BLE_UUID_CONTROL_CHARACTERISTIC, BLE_QUERY_COLOR_MODE, response=False)
+            if is_segmented_model(self.model):
+                # Segmented models may answer colour queries on SEGMENT (0xA5)
+                # rather than (or in addition to) COLOR (0x05); ported from
+                # Laserology/govee_ble_lights' _request_device_state. Sent
+                # alongside, not instead of, the COLOR query above, since it's
+                # unconfirmed whether our segmented models answer 0x05 too.
+                await w(BLE_UUID_CONTROL_CHARACTERISTIC, BLE_QUERY_SEGMENT_COLOR, response=False)
             return True
         except BleakError:
             return False
