@@ -105,10 +105,16 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_set_brightness(self, brightness: int) -> None:
         raise NotImplementedError
 
-    async def async_set_rgb_color(self, r: int, g: int, b: int) -> None:
+    async def async_set_rgb_color(self, r: int, g: int, b: int, *, verify: bool = True) -> None:
+        """Set the colour. ``verify=False`` skips the post-command state
+        query some transports (BLE) otherwise schedule - needed for fade
+        frames, where a query per intermediate frame would flood the
+        device (see fade.py). Transports without that concept (LAN) accept
+        and ignore the flag."""
         raise NotImplementedError
 
-    async def async_set_color_temp(self, kelvin: int) -> None:
+    async def async_set_color_temp(self, kelvin: int, *, verify: bool = True) -> None:
+        """Set colour temperature. See ``async_set_rgb_color`` re ``verify``."""
         raise NotImplementedError
 
     async def async_apply_effect(self, effect: str) -> None:

@@ -53,11 +53,30 @@
     },
     "error": {
       "cannot_connect": "Failed to connect",
+      "no_device_selected": "Select a discovered device, or enter both an IP address and a model.",
       "unknown": "Unexpected error"
     },
     "abort": {
       "already_configured": "Device is already configured",
       "no_devices_found": "No devices found on the network"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Fade durations",
+        "description": "Govee firmware has no native fade; these are simulated by sending intermediate colours over time. Seconds; 0 disables that fade.",
+        "data": {
+          "fade": "Colour change fade",
+          "fade_on": "Power-on fade-in",
+          "fade_off": "Power-off fade-to-black"
+        },
+        "data_description": {
+          "fade": "Crossfade duration for an ordinary colour or colour-temperature change while the light is already on.",
+          "fade_on": "Ramp-up duration when the light turns on, fading in from black.",
+          "fade_off": "Fade-to-black duration before the light powers off."
+        }
+      }
     }
   },
   "issues": {

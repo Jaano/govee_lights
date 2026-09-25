@@ -16,7 +16,7 @@
         "title": "Govee BLE",
         "data": {
           "address": "Seade",
-          "model": "Govee valguse mudel"
+          "model": "Govee valgusti mudel"
         },
         "data_description": {
           "address": "Läheduses avastatud Govee seadme Bluetoothi aadress.",
@@ -30,7 +30,7 @@
         "data": {
           "lan_device_key": "Avastatud seade",
           "lan_ip": "IP-aadress (käsitsi)",
-          "lan_sku": "Govee valguse mudel"
+          "lan_sku": "Govee valgusti mudel"
         },
         "data_description": {
           "lan_device_key": "Vali automaatselt avastatud seade.",
@@ -43,7 +43,7 @@
         "title": "Kinnita Govee BLE seade",
         "description": "Seadista {name}",
         "data": {
-          "model": "Govee valguse mudel"
+          "model": "Govee valgusti mudel"
         },
         "data_description": {
           "model": "Mudelinumber seadme kleebiselt, nt H617C või H6076B."
@@ -53,6 +53,7 @@
     },
     "error": {
       "cannot_connect": "Ühendamine ebaõnnestus",
+      "no_device_selected": "Vali avastatud seade või sisesta nii IP-aadress kui ka mudel.",
       "unknown": "Ootamatu viga"
     },
     "abort": {
@@ -60,10 +61,28 @@
       "no_devices_found": "Võrgust ei leitud ühtegi seadet"
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Hajutuse kestused",
+        "description": "Govee püsivaral puudub sisseehitatud hajutus; see jäljendatakse vahepealsete värvide järjestikuse saatmisega. Sekundites; 0 lülitab vastava hajutuse välja.",
+        "data": {
+          "fade": "Värvimuutuse hajutus",
+          "fade_on": "Sisselülitamise hajutus",
+          "fade_off": "Väljalülitamise hajutus"
+        },
+        "data_description": {
+          "fade": "Üleminekuaeg värvi või värvitemperatuuri muutmisel, kui valgusti on juba sees.",
+          "fade_on": "Sisselülitamisel mustast soovitud värvini tõusmise aeg.",
+          "fade_off": "Enne väljalülitamist mustaks tuhmumise aeg."
+        }
+      }
+    }
+  },
   "issues": {
     "ble_needs_pairing": {
       "title": "Govee {model} vajab uuesti sidumist",
-      "description": "Seade aadressil {address} on Bluetoothi kaudu leitav, kuid ei paku juhtimisteenust. Tõenäoliselt on seade tehaseseadetele lähtestatud. Seosta seade uuesti Govee Home rakenduses, misjärel loob see automaatselt uue ühenduse."
+      "description": "Seade aadressil {address} on Bluetoothi kaudu leitav, kuid ei paku juhtimisteenust. Tõenäoliselt on seade tehaseseadetele lähtestatud. Seo seade uuesti Govee Home rakenduses, misjärel loob see automaatselt uue ühenduse."
     },
     "lan_not_responding": {
       "title": "Govee {sku} ei vasta LAN API päringutele",

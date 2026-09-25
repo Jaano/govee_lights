@@ -596,7 +596,7 @@ class GoveeBLECoordinator(GoveeCoordinator):
         val = round(brightness * 100 / 255) if uses_percent_brightness(self.model) else brightness
         await self.send_command(GoveeBLE.build_single_packet(GoveeBLE.LEDCommand.BRIGHTNESS, [val]))
 
-    async def async_set_rgb_color(self, r: int, g: int, b: int) -> None:
+    async def async_set_rgb_color(self, r: int, g: int, b: int, *, verify: bool = True) -> None:
         self.color_temp_kelvin = None
         if is_segmented_model(self.model):
             packet = GoveeBLE.build_single_packet(
@@ -608,9 +608,9 @@ class GoveeBLECoordinator(GoveeCoordinator):
             packet = GoveeBLE.build_single_packet(
                 GoveeBLE.LEDCommand.COLOR, [GoveeBLE.LEDMode.MANUAL, r, g, b]
             )
-        await self.send_command(packet)
+        await self.send_command(packet, verify=verify)
 
-    async def async_set_color_temp(self, kelvin: int) -> None:
+    async def async_set_color_temp(self, kelvin: int, *, verify: bool = True) -> None:
         """Send a native colour-temperature packet (white-balance mode).
 
         Packet layout (per homebridge-govee):
@@ -632,7 +632,7 @@ class GoveeBLECoordinator(GoveeCoordinator):
         )
         self.color_temp_kelvin = kelvin
         self.rgb_color = (r, g, b)
-        await self.send_command(packet)
+        await self.send_command(packet, verify=verify)
 
     async def async_set_effect(self, ptreal_cmds: list[str]) -> None:
         """Apply a ptReal scene effect and power the device on."""
@@ -946,10 +946,17 @@ class GoveeBLECoordinator(GoveeCoordinator):
 
     # ── Command dispatch ──────────────────────────────────────────────────────
 
-    async def send_command(self, packet: bytes, *, expected_power: bool | None = None) -> None:
-        """Send a single BLE packet, ensuring a live connection."""
+    async def send_command(
+        self, packet: bytes, *, expected_power: bool | None = None, verify: bool = True
+    ) -> None:
+        """Send a single BLE packet, ensuring a live connection.
+
+        ``verify=False`` skips scheduling the post-command state-query task -
+        used for fade frames (fade.py), where querying after every
+        intermediate frame would flood the device with state requests.
+        """
         async with self._lock:
-            await self._dispatch([packet], expected_power=expected_power)
+            await self._dispatch([packet], expected_power=expected_power, verify=verify)
 
     async def send_commands(
         self,
@@ -957,16 +964,18 @@ class GoveeBLECoordinator(GoveeCoordinator):
         delay: float = BLE_INTER_FRAME_DELAY,
         *,
         expected_power: bool | None = None,
+        verify: bool = True,
     ) -> None:
         """Send multiple BLE packets with an inter-frame delay, under a single lock."""
         async with self._lock:
-            await self._dispatch(packets, delay=delay, expected_power=expected_power)
+            await self._dispatch(packets, delay=delay, expected_power=expected_power, verify=verify)
 
     async def _dispatch(
         self,
         packets: list[bytes | bytearray],
         delay: float = 0.0,
         expected_power: bool | None = None,
+        verify: bool = True,
     ) -> None:
         """Internal: write packets to the device with retry on connection errors."""
         for attempt in range(BLE_CONNECT_ATTEMPTS):
@@ -983,11 +992,12 @@ class GoveeBLECoordinator(GoveeCoordinator):
                 if not self._available:
                     self._available = True
                     self.async_set_updated_data(self._state_snapshot())
-                # Confirm the command took effect and refresh HA's state.
-                self.hass.async_create_background_task(
-                    self._query_state_after_command(expected_power=expected_power),
-                    f"govee_ble_state_verify_{self.address}",
-                )
+                if verify:
+                    # Confirm the command took effect and refresh HA's state.
+                    self.hass.async_create_background_task(
+                        self._query_state_after_command(expected_power=expected_power),
+                        f"govee_ble_state_verify_{self.address}",
+                    )
                 return
             except BleakError as err:
                 self._client = None

@@ -6,16 +6,21 @@ from homeassistant.components.bluetooth import (
     BluetoothServiceInfoBleak,
     async_discovered_service_info,
 )
-from homeassistant.config_entries import ConfigFlow
+from homeassistant.config_entries import ConfigFlow, OptionsFlowWithReload
 from homeassistant.const import CONF_ADDRESS, CONF_MODEL, CONF_TYPE
+from homeassistant.core import callback
 import voluptuous as vol
 
 from .const import (
+    CONF_FADE,
+    CONF_FADE_OFF,
+    CONF_FADE_ON,
     CONF_LAN_DEVICE_ID,
     CONF_LAN_IP,
     CONF_LAN_SKU,
     CONF_TYPE_BLE,
     CONF_TYPE_LAN,
+    DEFAULT_FADE,
     DOMAIN,
 )
 from .govee_ble import GoveeBLE
@@ -23,11 +28,17 @@ from .govee_lan import GoveeLANCoordinator
 from .models import detect_model
 
 if TYPE_CHECKING:
-    from homeassistant.config_entries import ConfigFlowResult
+    from homeassistant.config_entries import ConfigEntry, ConfigFlowResult
 
 
 class GoveeConfigFlow(ConfigFlow, domain=DOMAIN):
     VERSION = 1
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> GoveeOptionsFlow:
+        """Get the options flow for this handler."""
+        return GoveeOptionsFlow()
 
     def __init__(self) -> None:
         """Initialize the config flow."""
@@ -221,6 +232,35 @@ class GoveeConfigFlow(ConfigFlow, domain=DOMAIN):
             data_schema=vol.Schema(schema_fields),
             description_placeholders={"discovered": str(len(self._lan_discovered))},
             errors=errors,
+        )
+
+
+class GoveeOptionsFlow(OptionsFlowWithReload):
+    """Per-device software crossfade durations (fade, fade_on, fade_off).
+
+    Govee firmware has no native fade; see fade.py. Options, not a fixed
+    default, so each device can tune (or disable) fading independently from
+    the UI. Reloads the config entry on save, so the light entity picks up
+    the new durations on its next construction.
+    """
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        if user_input is not None:
+            return self.async_create_entry(title="", data=user_input)
+
+        options = self.config_entry.options
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema({
+                vol.Optional(CONF_FADE, default=options.get(CONF_FADE, DEFAULT_FADE)):
+                    vol.All(vol.Coerce(float), vol.Range(min=0)),
+                vol.Optional(CONF_FADE_ON, default=options.get(CONF_FADE_ON, DEFAULT_FADE)):
+                    vol.All(vol.Coerce(float), vol.Range(min=0)),
+                vol.Optional(CONF_FADE_OFF, default=options.get(CONF_FADE_OFF, DEFAULT_FADE)):
+                    vol.All(vol.Coerce(float), vol.Range(min=0)),
+            }),
         )
 
 

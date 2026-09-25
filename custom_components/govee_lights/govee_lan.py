@@ -188,10 +188,12 @@ class GoveeLANCoordinator(GoveeCoordinator):
     async def async_set_brightness(self, brightness: int) -> None:
         await self._require_device().set_brightness(round(brightness * 100 / 255))
 
-    async def async_set_rgb_color(self, r: int, g: int, b: int) -> None:
+    async def async_set_rgb_color(self, r: int, g: int, b: int, *, verify: bool = True) -> None:
+        # verify is BLE-only (see coordinator.py); govee-local-api's UDP
+        # writes are already fire-and-forget, so there is nothing to skip.
         await self._require_device().set_rgb_color(r, g, b)
 
-    async def async_set_color_temp(self, kelvin: int) -> None:
+    async def async_set_color_temp(self, kelvin: int, *, verify: bool = True) -> None:
         await self._require_device().set_temperature(kelvin)
 
     async def async_set_effect(self, ptreal_cmds: list[str]) -> None:
