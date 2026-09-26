@@ -410,6 +410,9 @@ class GoveeBLECoordinator(GoveeCoordinator):
 
         self._client: BleakClient | None = None
         self._lock = asyncio.Lock()
+        # Set by each POWER notification; the post-command verify waits on it
+        # rather than a fixed delay (see _query_state_after_command).
+        self._power_reported = asyncio.Event()
         self._cancel_disconnect: CALLBACK_TYPE | None = None
         self._unsub_advertisement: CALLBACK_TYPE | None = None
         self._graceful_disconnect: bool = False
@@ -638,10 +641,15 @@ class GoveeBLECoordinator(GoveeCoordinator):
         # so a single dropped POWER packet is the miss users notice most.
         packet = GoveeBLE.build_single_packet(GoveeBLE.LEDCommand.POWER, [0x1])
         await self.send_commands([packet] * BLE_POWER_PACKET_REPEAT, expected_power=True)
+        # Record what was sent, so an update pushed before the device's own
+        # answer can't carry the old power state (the verify corrects it if
+        # the device disagrees).
+        self.is_on = True
 
     async def async_turn_off(self) -> None:
         packet = GoveeBLE.build_single_packet(GoveeBLE.LEDCommand.POWER, [0x0])
         await self.send_commands([packet] * BLE_POWER_PACKET_REPEAT, expected_power=False)
+        self.is_on = False
 
     async def async_set_brightness(self, brightness: int) -> None:
         """Set brightness. brightness is HA scale (0-255)."""
@@ -920,6 +928,7 @@ class GoveeBLECoordinator(GoveeCoordinator):
         try:
             if domain == GoveeBLE.LEDCommand.POWER:
                 self.is_on = payload[0] == 0x01
+                self._power_reported.set()
             elif domain == GoveeBLE.LEDCommand.BRIGHTNESS:
                 self.brightness_raw = payload[0]
             elif domain == GoveeBLE.LEDCommand.COLOR:
@@ -1030,13 +1039,25 @@ class GoveeBLECoordinator(GoveeCoordinator):
         """
         await asyncio.sleep(0.5)
         async with self._lock:
+            self._power_reported.clear()
             queried = await self._send_state_queries()
 
         if expected_power is None or not queried:
             return
 
-        # Let the notification response arrive before comparing.
-        await asyncio.sleep(0.3)
+        # Compare only once the device has actually answered. A fixed wait
+        # (0.3 s, formerly) read the old state when the answer was slow -
+        # seen live on H617C after a fresh connect: answer 0.33 s after the
+        # query, so a turn-off was "not confirmed" and needlessly re-sent.
+        try:
+            await asyncio.wait_for(
+                self._power_reported.wait(), timeout=BLE_QUERY_RESPONSE_TIMEOUT
+            )
+        except TimeoutError:
+            _LOGGER.debug(
+                "%s (%s): no POWER answer to verify query", self.model, self.address
+            )
+            return
         if self.is_on != expected_power:
             _LOGGER.info(
                 "%s (%s): POWER command not confirmed (wanted %s, device reports %s) - retrying",
