@@ -766,7 +766,7 @@ class GoveeBLECoordinator(GoveeCoordinator):
             "segment_colors": list(self.segment_colors),
         }
 
-    async def _ensure_connected(self) -> BleakClient:
+    async def _ensure_connected(self, *, query_state: bool = True) -> BleakClient:
         """Return a live BleakClient, establishing a new connection if required."""
         if self._client and self._client.is_connected:
             _LOGGER.debug("Reusing existing connection to %s (%s)", self.model, self.address)
@@ -825,7 +825,8 @@ class GoveeBLECoordinator(GoveeCoordinator):
 
         self._reset_disconnect_timer()
         await self._start_notify()
-        await self._send_state_queries()
+        if query_state:
+            await self._send_state_queries()
         return self._client
 
     @callback
@@ -1007,8 +1008,8 @@ class GoveeBLECoordinator(GoveeCoordinator):
     async def _query_state_after_command(self, expected_power: bool | None = None) -> None:
         """Query state 0.5 s after a command to confirm it took effect.
 
-        Corrects any pre-command snapshot left by _send_state_queries() on a
-        fresh connection. If expected_power is given, also compares the result
+        Also the state refresh for a command that opened a fresh connection
+        (see _ensure_connected's query_state). If expected_power is given, also compares the result
         and re-sends POWER once on a mismatch (write-without-response has no ACK).
         """
         await asyncio.sleep(0.5)
@@ -1068,7 +1069,7 @@ class GoveeBLECoordinator(GoveeCoordinator):
         """Internal: write packets to the device with retry on connection errors."""
         for attempt in range(BLE_CONNECT_ATTEMPTS):
             try:
-                client = await self._ensure_connected()
+                client = await self._ensure_connected(query_state=not verify)
                 for i, pkt in enumerate(packets):
                     _LOGGER.debug(
                         "tx %s [%d/%d]: %s",

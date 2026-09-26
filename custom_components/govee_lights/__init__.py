@@ -49,13 +49,11 @@ async def _async_migrate_lan_unique_ids(
     if sku == new_id:
         return
     dev_reg = dr.async_get(hass)
-    device = dev_reg.async_get_device(identifiers={(DOMAIN, sku)})
-    if (
-        device is not None
-        and entry.entry_id in device.config_entries
-        and dev_reg.async_get_device(identifiers={(DOMAIN, new_id)}) is None
-    ):
-        dev_reg.async_update_device(device.id, new_identifiers={(DOMAIN, new_id)})
+    devices = dr.async_entries_for_config_entry(dev_reg, entry.entry_id)
+    if not any((DOMAIN, new_id) in device.identifiers for device in devices):
+        for device in devices:
+            if (DOMAIN, sku) in device.identifiers:
+                dev_reg.async_update_device(device.id, new_identifiers={(DOMAIN, new_id)})
 
     @callback
     def _rekey(entity_entry: er.RegistryEntry) -> dict[str, Any] | None:

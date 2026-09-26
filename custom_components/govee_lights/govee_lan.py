@@ -299,16 +299,19 @@ class GoveeLANCoordinator(GoveeCoordinator):
     async def async_turn_on(self) -> None:
         await self._paced(self._require_device().turn_on)
         self._expect(True, on=True)
+        self.is_on = True
 
     async def async_turn_off(self) -> None:
         await self._paced(self._require_device().turn_off)
         self._expect(True, on=False)
+        self.is_on = False
 
     async def async_set_brightness(self, brightness: int) -> None:
         device = self._require_device()
         percent = round(brightness * 100 / 255)
         await self._paced(lambda: device.set_brightness(percent))
         self._expect(True, brightness=percent)
+        self.brightness_raw = percent
 
     async def async_set_rgb_color(self, r: int, g: int, b: int, *, verify: bool = True) -> None:
         device = self._require_device()
@@ -523,9 +526,10 @@ class GoveeLANCoordinator(GoveeCoordinator):
     def _verify_pending(self, device: GoveeDevice) -> bool:
         """Check a devStatus against the last verified writes.
 
-        Returns True while the report shouldn't be applied: it may predate
-        our writes (not yet settled), or it shows a missed write that is
-        being resent - applying it would flash the old state in HA first.
+        Returns True while the report shouldn't be applied because it may
+        predate our writes (not yet settled). A settled report that shows a
+        missed write is applied - HA shows what the device really did, e.g.
+        the switch goes back off - while the missed fields are resent.
         """
         if not self._expected:
             return False
@@ -555,7 +559,7 @@ class GoveeLANCoordinator(GoveeCoordinator):
                 self.sku, self.ip, missed, {k: reported[k] for k in missed},
             )
             self.hass.async_create_task(self._async_resend(missed))
-            return True
+            return False
         _LOGGER.warning(
             "Govee %s (%s) did not apply %s after %d resend(s); reported %s",
             self.sku, self.ip, missed, LAN_VERIFY_RETRIES, {k: reported[k] for k in missed},
@@ -565,12 +569,14 @@ class GoveeLANCoordinator(GoveeCoordinator):
 
     def _on_device_update(self, device: GoveeDevice) -> None:
         """Called by the govee-local-api controller when a devStatus response arrives."""
-        if not self._available:
+        became_available = not self._available
+        if became_available:
             _LOGGER.info("LAN device %s (%s) is available", device.sku, device.ip)
             self._available = True
         self._clear_repair_issue(self._issue_key)
         if self._verify_pending(device):
-            self.async_set_updated_data(self._state_snapshot())
+            if became_available:
+                self.async_set_updated_data(self._state_snapshot())
             return
         self.is_on = device.on
         self.brightness_raw = device.brightness
