@@ -28,6 +28,12 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.brightness_raw: int = 0
         self.rgb_color: tuple[int, int, int] | None = None
         self.color_temp_kelvin: int | None = None
+        # Per-segment colours (index 0 = segment 1), None = unknown
+        self.segment_colors: list[tuple[int, int, int] | None] = []
+        # How many segment entities currently want per-segment readback.
+        # Transports that can read segments back (BLE) only spend the extra
+        # query frames while this is non-zero.
+        self.segment_state_listeners: int = 0
 
     @property
     def available(self) -> bool:
@@ -87,6 +93,16 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def inferred_effect(self) -> str | None:
         raise NotImplementedError
 
+    @property
+    def segment_count(self) -> int:
+        """Individually addressable segments; 0 = no segment control."""
+        return 0
+
+    @property
+    def segment_readback(self) -> bool:
+        """Whether the device reports per-segment colours back to us."""
+        return False
+
     def cleanup(self) -> None:
         """Override in subclass to release resources."""
 
@@ -115,6 +131,12 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_set_color_temp(self, kelvin: int, *, verify: bool = True) -> None:
         """Set colour temperature. See ``async_set_rgb_color`` re ``verify``."""
+        raise NotImplementedError
+
+    async def async_set_segment_colors(
+        self, colors: dict[int, tuple[int, int, int]], *, verify: bool = True
+    ) -> None:
+        """Paint individual segments ({0-based index: rgb})."""
         raise NotImplementedError
 
     async def async_apply_effect(self, effect: str) -> None:

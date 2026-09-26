@@ -16,6 +16,7 @@ Controls Govee lighting from Home Assistant over local LAN or direct BLE. No clo
 - Full scene list sourced from the Govee API and cached locally
 - Brightness, color, and power state
 - Software crossfade for color/color-temperature changes and power on/off
+- Per-segment control for segmented strips (BLE and LAN): a `govee_lights.set_segment_color` service on the main light and optional per-segment light entities (disabled by default)
 - Hardened BLE reliability: passive advertisement decoding keeps on/off state live without a connection (H617A/H617C), bounded connect/disconnect timeouts, redundant power commands, and a connection cap for ESPHome Bluetooth proxy setups — see [GOVEE_BLE.md](GOVEE_BLE.md) for details
 
 ---
@@ -91,8 +92,8 @@ Report bugs or missing device support in the [issue tracker](https://github.com/
 ## Credits
 
 - [@cralex96](https://github.com/cralex96) and [@Rombond](https://github.com/Rombond) — original BLE patches this integration grew from
-- [@Laserology](https://github.com/Laserology/govee_ble_lights) — original BLE implementation and model reverse-engineering, which this integration's BLE code is based on; also the source of the per-model quirk registry (`models.py`), diagnostics support, the SEGMENT (0xA5) state-query/notification handling segmented models need for colour read-back, and the software-crossfade design (deadline-paced wall-clock timing, a render epoch so a newer fade always wins) behind transition support
-- [@MineNights](https://github.com/MineNights/govee_lights) — H617E's brightness-as-percentage quirk fix, confirmed against real hardware
+- [@Laserology](https://github.com/Laserology/govee_ble_lights) — original BLE implementation and model reverse-engineering, which this integration's BLE code is based on; also the source of the per-model quirk registry (`models.py`), diagnostics support, the SEGMENT (0xA5) state-query/notification handling segmented models need for colour read-back, the software-crossfade design (deadline-paced wall-clock timing, a render epoch so a newer fade always wins) behind transition support
+- [@MineNights](https://github.com/MineNights/govee_lights) — H617E's brightness-as-percentage quirk fix, confirmed against real hardware; also the groundwork for per-segment control (segment packet and mask layout, per-segment light entities)
 - [@teh-hippo](https://github.com/teh-hippo/govee_ble_lights) — independent BLE implementation, particularly useful for H6199 and state-reading
 - [@wez](https://github.com/wez/govee2mqtt) — govee2mqtt's LAN protocol work and scene handling saved a lot of guesswork here
 - [@alex4108](https://github.com/alex4108/govee_ble_lights) — reliability-hardening techniques from their ESPHome-proxy stress testing: passive advertisement-based power state, bounded connect/disconnect timeouts, POWER packet redundancy, post-command compare-and-retry, and GATT connection concurrency capping

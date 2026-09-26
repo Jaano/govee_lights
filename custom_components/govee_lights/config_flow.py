@@ -173,7 +173,7 @@ class GoveeConfigFlow(ConfigFlow, domain=DOMAIN):
 
         # Run discovery exactly once per flow (cache results in self._lan_discovered).
         if not self._lan_discovered:
-            found = await GoveeLANCoordinator.discover_devices()
+            found = await GoveeLANCoordinator.discover_devices(self.hass)
             self._lan_discovered = {
                 f"{d.sku} ({d.ip})": d for d in found
             }
@@ -199,7 +199,7 @@ class GoveeConfigFlow(ConfigFlow, domain=DOMAIN):
 
             if not errors:
                 # Verify we can reach the device before creating the entry.
-                reachable = await GoveeLANCoordinator.test_connectivity(ip)
+                reachable = await GoveeLANCoordinator.test_connectivity(self.hass, ip)
                 if not reachable:
                     errors["base"] = "cannot_connect"
                 else:

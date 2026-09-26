@@ -79,6 +79,33 @@
       }
     }
   },
+  "entity": {
+    "light": {
+      "segment": {
+        "name": "Segment {segment}"
+      }
+    }
+  },
+  "services": {
+    "set_segment_color": {
+      "name": "Set segment colour",
+      "description": "Paints the given segments of a segmented Govee light one colour, leaving the other segments unchanged.",
+      "fields": {
+        "segments": {
+          "name": "Segments",
+          "description": "Segment numbers to paint, starting from 1, e.g. [1, 2, 3]."
+        },
+        "rgb_color": {
+          "name": "Colour",
+          "description": "Colour to paint the segments."
+        },
+        "brightness": {
+          "name": "Brightness",
+          "description": "Brightness for these segments, 0-255. Emulated by scaling the colour; defaults to full."
+        }
+      }
+    }
+  },
   "issues": {
     "ble_needs_pairing": {
       "title": "Govee {model} needs re-pairing",

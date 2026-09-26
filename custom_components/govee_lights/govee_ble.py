@@ -24,6 +24,7 @@ from homeassistant.components import bluetooth
 from homeassistant.components.light.const import ColorMode
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.event import async_call_later
 
@@ -36,6 +37,7 @@ if TYPE_CHECKING:
     from bleak.backends.device import BLEDevice
 from .govee import GoveeHelper
 from .models import (
+    get_segment_count,
     has_advert_state,
     is_segmented_model,
     uses_colour_d_mode,
@@ -91,6 +93,15 @@ BLE_QUERY_POWER = _make_query_frame(0x01)
 BLE_QUERY_BRIGHTNESS = _make_query_frame(0x04)
 BLE_QUERY_COLOR_MODE = _make_query_frame(0x05)
 BLE_QUERY_SEGMENT_COLOR = _make_query_frame(0xA5, b"\x01")
+# A SEGMENT (0xA5) query with payload [n] answers with segment group n
+# (1-based): [n, then 3 x (brightness, r, g, b)] - i.e. segments 3n-2..3n.
+# Decoded from live H617C captures (2026-09-25); group 1 is what the plain
+# BLE_QUERY_SEGMENT_COLOR above already asks for.
+SEGMENTS_PER_READBACK_GROUP = 3
+
+
+def _segment_query_frame(group: int) -> bytes:
+    return _make_query_frame(0xA5, bytes([group]))
 
 
 # ── GoveeBLE - low-level static helpers ─────────────────────────────────────
@@ -374,6 +385,7 @@ class GoveeBLECoordinator(GoveeCoordinator):
         # Last-known device state (updated from BLE notifications)
         self.mode: int | None = None
         self.music_mode_id: int | None = None
+        self.segment_colors = [None] * self.segment_count
 
         self._issue_key = f"ble_needs_pairing_{address.replace(':', '')}"
 
@@ -424,6 +436,14 @@ class GoveeBLECoordinator(GoveeCoordinator):
     @property
     def supports_music_modes(self) -> bool:
         return True
+
+    @property
+    def segment_count(self) -> int:
+        return get_segment_count(self.model) if is_segmented_model(self.model) else 0
+
+    @property
+    def segment_readback(self) -> bool:
+        return self.segment_count > 0
 
     @property
     def setup_in_background(self) -> bool:
@@ -598,6 +618,7 @@ class GoveeBLECoordinator(GoveeCoordinator):
 
     async def async_set_rgb_color(self, r: int, g: int, b: int, *, verify: bool = True) -> None:
         self.color_temp_kelvin = None
+        self.segment_colors = [(r, g, b)] * self.segment_count
         if is_segmented_model(self.model):
             packet = GoveeBLE.build_single_packet(
                 GoveeBLE.LEDCommand.COLOR,
@@ -632,7 +653,50 @@ class GoveeBLECoordinator(GoveeCoordinator):
         )
         self.color_temp_kelvin = kelvin
         self.rgb_color = (r, g, b)
+        self.segment_colors = [(r, g, b)] * self.segment_count
         await self.send_command(packet, verify=verify)
+
+    async def async_set_segment_colors(
+        self, colors: dict[int, tuple[int, int, int]], *, verify: bool = True
+    ) -> None:
+        """Paint individual segments, one SEGMENTS packet per distinct colour.
+
+        Segments sharing a colour share one packet (their bits OR'd into the
+        mask), and the whole batch goes out under one lock with at most one
+        post-command verify - painting 15 segments is not 15 verify tasks.
+        Mask bit i = segment i (0-based), low byte first, same layout as the
+        whole-strip 0xFF 0x7F in async_set_rgb_color. Per-segment grouping
+        adapted from Laserology/govee_ble_lights' segments_to_writes; mask
+        arithmetic from MineNights/govee_lights 5e9be31.
+        """
+        count = self.segment_count
+        if count == 0:
+            raise HomeAssistantError(f"Govee {self.model} has no segment control")
+        masks: dict[tuple[int, int, int], int] = {}
+        for index, color in colors.items():
+            if not 0 <= index < count:
+                raise HomeAssistantError(
+                    f"Segment {index + 1} out of range for Govee {self.model} (1-{count})"
+                )
+            masks[color] = masks.get(color, 0) | (1 << index)
+        if not masks:
+            return
+        packets = [
+            GoveeBLE.build_single_packet(
+                GoveeBLE.LEDCommand.COLOR,
+                [GoveeBLE.LEDMode.SEGMENTS, 0x01, r, g, b,
+                 0x00, 0x00, 0x00, 0x00, 0x00, mask & 0xFF, (mask >> 8) & 0xFF],
+            )
+            for (r, g, b), mask in masks.items()
+        ]
+        self.color_temp_kelvin = None
+        for index, color in colors.items():
+            self.segment_colors[index] = color
+        if 0 in colors:
+            # Matches readback semantics: the whole-strip colour is segment 1's.
+            self.rgb_color = colors[0]
+        await self.send_commands(packets, verify=verify)
+        self.async_set_updated_data(self._state_snapshot())
 
     async def async_set_effect(self, ptreal_cmds: list[str]) -> None:
         """Apply a ptReal scene effect and power the device on."""
@@ -699,6 +763,7 @@ class GoveeBLECoordinator(GoveeCoordinator):
             "rgb_color": self.rgb_color,
             "mode": self.mode,
             "music_mode_id": self.music_mode_id,
+            "segment_colors": list(self.segment_colors),
         }
 
     async def _ensure_connected(self) -> BleakClient:
@@ -882,16 +947,29 @@ class GoveeBLECoordinator(GoveeCoordinator):
                         self.rgb_color = (payload[1], payload[2], payload[3])
                         self.color_temp_kelvin = None  # device is in plain RGB mode
             elif domain == GoveeBLE.LEDCommand.SEGMENT and len(payload) >= 5:
-                # Segmented models' answer to BLE_QUERY_SEGMENT_COLOR (0xA5);
-                # layout matches Laserology/govee_ble_lights' SEGMENT parsing
-                # (payload[0:2] unused here - likely a segment index echo).
-                self.rgb_color = (payload[2], payload[3], payload[4])
-                self.color_temp_kelvin = None  # segment colour implies plain RGB mode
+                self._apply_segment_readback(payload)
             if not self._available:
                 self._available = True
             self.async_set_updated_data(self._state_snapshot())
         except (IndexError, ValueError):
             _LOGGER.debug("Failed to parse notify from %s: %s", self.address, data.hex())
+
+    def _apply_segment_readback(self, payload: bytes) -> None:
+        """Apply a SEGMENT (0xA5) group answer: [group, then 3 x (brightness,
+        r, g, b)] - see _segment_query_frame. Group 1's first segment doubles
+        as the whole-strip colour, the same payload[2:5] Laserology/
+        govee_ble_lights reads."""
+        group = payload[0]
+        for i in range(SEGMENTS_PER_READBACK_GROUP):
+            index = (group - 1) * SEGMENTS_PER_READBACK_GROUP + i
+            offset = 1 + 4 * i
+            if 0 <= index < len(self.segment_colors) and len(payload) >= offset + 4:
+                self.segment_colors[index] = (
+                    payload[offset + 1], payload[offset + 2], payload[offset + 3]
+                )
+        if group == 1:
+            self.rgb_color = (payload[2], payload[3], payload[4])
+            self.color_temp_kelvin = None  # segment colour implies plain RGB mode
 
     # ── State query ───────────────────────────────────────────────────────────
 
@@ -912,6 +990,16 @@ class GoveeBLECoordinator(GoveeCoordinator):
                 # alongside, not instead of, the COLOR query above, since it's
                 # unconfirmed whether our segmented models answer 0x05 too.
                 await w(BLE_UUID_CONTROL_CHARACTERISTIC, BLE_QUERY_SEGMENT_COLOR, response=False)
+                if self.segment_state_listeners > 0:
+                    # Remaining groups only while a segment entity is enabled -
+                    # up to 4 more frames per query for a 15-segment strip.
+                    groups = -(-self.segment_count // SEGMENTS_PER_READBACK_GROUP)
+                    for group in range(2, groups + 1):
+                        await w(
+                            BLE_UUID_CONTROL_CHARACTERISTIC,
+                            _segment_query_frame(group),
+                            response=False,
+                        )
             return True
         except BleakError:
             return False

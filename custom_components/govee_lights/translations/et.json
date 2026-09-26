@@ -79,6 +79,33 @@
       }
     }
   },
+  "entity": {
+    "light": {
+      "segment": {
+        "name": "Segment {segment}"
+      }
+    }
+  },
+  "services": {
+    "set_segment_color": {
+      "name": "Määra segmendi värv",
+      "description": "Värvib segmenteeritud Govee valgusti valitud segmendid ühte värvi, jättes ülejäänud segmendid muutmata.",
+      "fields": {
+        "segments": {
+          "name": "Segmendid",
+          "description": "Värvitavate segmentide numbrid alates 1-st, nt [1, 2, 3]."
+        },
+        "rgb_color": {
+          "name": "Värv",
+          "description": "Värv, millega segmendid värvitakse."
+        },
+        "brightness": {
+          "name": "Heledus",
+          "description": "Nende segmentide heledus, 0-255. Jäljendatakse värvi skaleerimisega; vaikimisi täisheledus."
+        }
+      }
+    }
+  },
   "issues": {
     "ble_needs_pairing": {
       "title": "Govee {model} vajab uuesti sidumist",
