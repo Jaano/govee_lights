@@ -24,7 +24,8 @@ if TYPE_CHECKING:
 
 # BLE address / LAN IP identify physical hardware and its network location;
 # diagnostics downloads are often pasted into public issue reports.
-TO_REDACT = {"address", "ip", "device_id"}
+# repair_issue_key embeds the BLE address or the LAN IP.
+TO_REDACT = {"address", "ip", "device_id", "repair_issue_key"}
 
 
 async def async_get_config_entry_diagnostics(

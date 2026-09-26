@@ -125,10 +125,14 @@ class GoveeLight(LightEntity, RestoreEntity):
         # _handle_coordinator_update checks it so a routine
         # device notification (e.g. the state query _ensure_connected always
         # runs right after reconnecting, mid-fade if the link had gone idle)
-        # can't stomp the render's own frames with a stale colour. Found live
-        # (2026-09-25): the BLE traffic itself faded cleanly the whole time -
-        # only the reported entity state glitched.
+        # can't stomp the render's own frames with a stale colour.
         self._fading = False
+        # Non-zero while a turn_off fade-to-black runs (a count: a second
+        # turn_off can start its own fade before the first one's cleanup).
+        # The light still reads as on, but a turn-on in that window must
+        # cancel the fade and its pending power-off and restore the colour,
+        # like a turn-on from off.
+        self._fading_off = 0
 
         # The colour/CT in effect just before the last fade-to-black, so a
         # later bare turn-on (no explicit colour) restores it instead of
@@ -295,12 +299,16 @@ class GoveeLight(LightEntity, RestoreEntity):
                 return
             if color == target_rgb:
                 await commit_final()
+                self.async_write_ha_state()
             else:
+                # Intermediate frames update the tracked colour (the next
+                # fade starts from here) but aren't written to HA - that
+                # would be ~20 state changes a second in the recorder and
+                # for every state listener.
                 await self._coordinator.async_set_rgb_color(*color, verify=False)
                 self._attr_rgb_color = color
                 self._attr_color_temp_kelvin = None
                 self._attr_color_mode = ColorMode.RGB
-            self.async_write_ha_state()
 
         try:
             if start is None or fade <= 0:
@@ -349,10 +357,15 @@ class GoveeLight(LightEntity, RestoreEntity):
     def _resume_target_rgb(self) -> RGBColor:
         """Colour to repaint on a bare turn-on: the colour active before the
         last fade-to-black, else whatever is already tracked, else white -
-        so a strip with no known colour at all never powers on dark."""
-        return self._pre_off_rgb_color or self._attr_rgb_color or (255, 255, 255)
+        so a strip with no known colour at all never powers on dark. Black
+        counts as unknown: it's what a fade-to-black or a readback of a dark
+        strip leaves behind, never a colour to power on to."""
+        for color in (self._pre_off_rgb_color, self._attr_rgb_color):
+            if color and any(color):
+                return color
+        return (255, 255, 255)
 
-    async def _async_bare_turn_on(self, transition: float | None) -> None:
+    async def _async_bare_turn_on(self, transition: float | None, from_black: bool) -> None:
         """Turn-on with no colour, CT or effect given, from off: repaint the
         last known colour - the device has no memory of its own, so without
         this it would power on dark (Laserology/govee_ble_lights c15d311)."""
@@ -360,17 +373,21 @@ class GoveeLight(LightEntity, RestoreEntity):
         if self._pre_off_color_temp_kelvin is not None:
             kelvin = self._pre_off_color_temp_kelvin
             await self._async_fade_to(
-                GoveeBLE.kelvin_to_rgb(kelvin), fade, True,
+                GoveeBLE.kelvin_to_rgb(kelvin), fade, from_black,
                 lambda: self._async_commit_color_temp(kelvin),
             )
         else:
             target = self._resume_target_rgb()
             await self._async_fade_to(
-                target, fade, True, lambda: self._async_commit_rgb(target)
+                target, fade, from_black, lambda: self._async_commit_rgb(target)
             )
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        was_off = not self._attr_is_on
+        # Truly off: fades start from black. Mid fade-to-black counts as off
+        # for choosing what to do (restore the colour, fade_on), but the
+        # fade continues from the colour the strip is showing now.
+        from_black = not self._attr_is_on
+        was_off = from_black or self._fading_off > 0
         effect_name: str | None = kwargs.get(ATTR_EFFECT)
         # Cloud scenes power the device on themselves (their ptReal burst ends
         # in a POWER packet); everything else needs it here.
@@ -391,7 +408,7 @@ class GoveeLight(LightEntity, RestoreEntity):
                     self._fade_on if was_off else self._fade
                 )
                 await self._async_fade_to(
-                    (r, g, b), fade, was_off, lambda: self._async_commit_rgb((r, g, b))
+                    (r, g, b), fade, from_black, lambda: self._async_commit_rgb((r, g, b))
                 )
                 self._attr_effect = EFFECT_OFF
                 self._pre_off_rgb_color = None
@@ -403,7 +420,7 @@ class GoveeLight(LightEntity, RestoreEntity):
                     self._fade_on if was_off else self._fade
                 )
                 await self._async_fade_to(
-                    GoveeBLE.kelvin_to_rgb(kelvin), fade, was_off,
+                    GoveeBLE.kelvin_to_rgb(kelvin), fade, from_black,
                     lambda: self._async_commit_color_temp(kelvin),
                 )
                 self._attr_effect = EFFECT_OFF
@@ -411,7 +428,7 @@ class GoveeLight(LightEntity, RestoreEntity):
                 self._pre_off_color_temp_kelvin = None
 
             elif ATTR_EFFECT not in kwargs and was_off:
-                await self._async_bare_turn_on(transition)
+                await self._async_bare_turn_on(transition, from_black)
 
             if effect_name == EFFECT_OFF:
                 # Leaving an effect: repaint the last solid colour so the
@@ -433,14 +450,19 @@ class GoveeLight(LightEntity, RestoreEntity):
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         # Remember the real colour before any fade-to-black erases it, so a
-        # later bare turn-on can restore it instead of powering on dark.
-        self._pre_off_rgb_color = self._attr_rgb_color
-        self._pre_off_color_temp_kelvin = self._attr_color_temp_kelvin
+        # later bare turn-on can restore it instead of powering on dark. Not
+        # when already off or fading off: the tracked colour is then black,
+        # or a fade frame, and would overwrite the real one (e.g. an "all
+        # off" automation hitting a light that's already off).
+        if self._attr_is_on and not self._fading_off:
+            self._pre_off_rgb_color = self._attr_rgb_color
+            self._pre_off_color_temp_kelvin = self._attr_color_temp_kelvin
 
         transition = kwargs.get(ATTR_TRANSITION)
         fade_off = transition if transition is not None else self._fade_off
 
         if fade_off > 0:
+            self._fading_off += 1
             try:
                 still_current = await self._async_fade_to(
                     (0, 0, 0), fade_off, False, lambda: self._async_commit_rgb((0, 0, 0))
@@ -455,6 +477,8 @@ class GoveeLight(LightEntity, RestoreEntity):
                     # fade-to-black; sending a stale power-off now would
                     # undo it.
                     return
+            finally:
+                self._fading_off -= 1
 
         try:
             await self._coordinator.async_turn_off()

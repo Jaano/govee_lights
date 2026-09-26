@@ -171,6 +171,38 @@ class GoveeBLE(GoveeHelper):
         return frame + bytes([GoveeBLE.sign_payload(frame)])
 
     @staticmethod
+    def build_segment_packets(
+        colors: dict[int, tuple[int, int, int]], count: int, device: str
+    ) -> list[bytes]:
+        """SEGMENTS-mode COLOR packets painting *colors* (0-based segment ->
+        RGB) on a *count*-segment strip; used by BLE and LAN (ptReal) alike.
+
+        Segments sharing a colour share one packet, their bits OR'd into the
+        mask. Mask bit i = segment i, low byte first - the layout of the
+        whole-strip 0xFF 0x7F in async_set_rgb_color, and of govee-local-api's
+        SEGMENT_CODES. Per-colour grouping adapted from Laserology/
+        govee_ble_lights' segments_to_writes; mask arithmetic from
+        MineNights/govee_lights 5e9be31.
+        """
+        if count == 0:
+            raise HomeAssistantError(f"Govee {device} has no segment control")
+        masks: dict[tuple[int, int, int], int] = {}
+        for index, color in colors.items():
+            if not 0 <= index < count:
+                raise HomeAssistantError(
+                    f"Segment {index + 1} out of range for Govee {device} (1-{count})"
+                )
+            masks[color] = masks.get(color, 0) | (1 << index)
+        return [
+            GoveeBLE.build_single_packet(
+                GoveeBLE.LEDCommand.COLOR,
+                [GoveeBLE.LEDMode.SEGMENTS, 0x01, r, g, b,
+                 0x00, 0x00, 0x00, 0x00, 0x00, mask & 0xFF, (mask >> 8) & 0xFF],
+            )
+            for (r, g, b), mask in masks.items()
+        ]
+
+    @staticmethod
     def build_music_packet(mode_id: int, sensitivity: int = 100) -> bytes:
         """Build a packet that activates a music-reactive mode."""
         sensitivity = max(0, min(100, sensitivity))
@@ -659,36 +691,14 @@ class GoveeBLECoordinator(GoveeCoordinator):
     async def async_set_segment_colors(
         self, colors: dict[int, tuple[int, int, int]], *, verify: bool = True
     ) -> None:
-        """Paint individual segments, one SEGMENTS packet per distinct colour.
+        """Paint individual segments (see GoveeBLE.build_segment_packets).
 
-        Segments sharing a colour share one packet (their bits OR'd into the
-        mask), and the whole batch goes out under one lock with at most one
+        The whole batch goes out under one lock with at most one
         post-command verify - painting 15 segments is not 15 verify tasks.
-        Mask bit i = segment i (0-based), low byte first, same layout as the
-        whole-strip 0xFF 0x7F in async_set_rgb_color. Per-segment grouping
-        adapted from Laserology/govee_ble_lights' segments_to_writes; mask
-        arithmetic from MineNights/govee_lights 5e9be31.
         """
-        count = self.segment_count
-        if count == 0:
-            raise HomeAssistantError(f"Govee {self.model} has no segment control")
-        masks: dict[tuple[int, int, int], int] = {}
-        for index, color in colors.items():
-            if not 0 <= index < count:
-                raise HomeAssistantError(
-                    f"Segment {index + 1} out of range for Govee {self.model} (1-{count})"
-                )
-            masks[color] = masks.get(color, 0) | (1 << index)
-        if not masks:
+        packets = GoveeBLE.build_segment_packets(colors, self.segment_count, self.model)
+        if not packets:
             return
-        packets = [
-            GoveeBLE.build_single_packet(
-                GoveeBLE.LEDCommand.COLOR,
-                [GoveeBLE.LEDMode.SEGMENTS, 0x01, r, g, b,
-                 0x00, 0x00, 0x00, 0x00, 0x00, mask & 0xFF, (mask >> 8) & 0xFF],
-            )
-            for (r, g, b), mask in masks.items()
-        ]
         self.color_temp_kelvin = None
         for index, color in colors.items():
             self.segment_colors[index] = color
@@ -916,8 +926,15 @@ class GoveeBLECoordinator(GoveeCoordinator):
                 self.mode = payload[0]
                 if self.mode == GoveeBLE.LEDMode.MUSIC and len(payload) >= 2:
                     self.music_mode_id = payload[1]
-                # SEGMENTS mode: nothing to do here beyond setting self.mode
-                # above. This domain's SEGMENTS-mode response was previously
+                elif self.mode == GoveeBLE.LEDMode.SEGMENTS:
+                    # Plain per-segment colour, so not colour-temperature
+                    # mode. Decided here, from the reported mode, not in
+                    # _apply_segment_readback: the SEGMENT colour answer
+                    # comes in CT mode too, and clearing CT on it wiped a
+                    # just-set colour temperature on every verify.
+                    self.color_temp_kelvin = None
+                # SEGMENTS mode: no colour read here. This domain's
+                # SEGMENTS-mode response was previously
                 # (mis)read for colour too (payload[2:5]), but verified
                 # against a real H617C (2026-09-25) to return (0, 0, 0) -
                 # garbage - while the dedicated SEGMENT (0xA5) query/response
@@ -970,7 +987,6 @@ class GoveeBLECoordinator(GoveeCoordinator):
                 )
         if group == 1:
             self.rgb_color = (payload[2], payload[3], payload[4])
-            self.color_temp_kelvin = None  # segment colour implies plain RGB mode
 
     # ── State query ───────────────────────────────────────────────────────────
 

@@ -71,6 +71,7 @@ async def run_fade(
 
     begin = time.monotonic()
     last_write = 0.0
+    last_frame = start
     while is_current():
         elapsed = time.monotonic() - begin
         # Reserve one frame's write time so the exact target lands by `fade`.
@@ -78,9 +79,14 @@ async def run_fade(
             await send_frame(target)
             break
         fraction = elapsed / fade
-        # The start colour is already on the strip; don't re-write it.
-        if fraction > 0:
+        frame = interpolate_rgb(start, target, fraction)
+        # Skip frames that change nothing - including the start colour,
+        # already on the strip. An intermediate frame that rounds to the
+        # target is skipped too: only the final call may carry the target,
+        # which callers treat as the exact, verified command.
+        if frame not in (last_frame, target):
             write_start = time.monotonic()
-            await send_frame(interpolate_rgb(start, target, fraction))
+            await send_frame(frame)
             last_write = time.monotonic() - write_start
+            last_frame = frame
         await asyncio.sleep(min(interval, max(0.0, fade - (time.monotonic() - begin))))

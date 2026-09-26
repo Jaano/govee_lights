@@ -334,37 +334,30 @@ class GoveeLANCoordinator(GoveeCoordinator):
     ) -> None:
         """Paint individual segments in one ptReal datagram.
 
-        Same packets as BLE (govee_ble.py): one per distinct colour, mask bit
-        i = segment i, low byte first - govee-local-api's SEGMENT_CODES use
-        that layout too, but it sends one datagram per segment, which at
-        LAN_COMMAND_SPACING would make painting all 10 segments take 1 s.
+        Same packets as BLE (GoveeBLE.build_segment_packets). govee-local-api
+        has a per-segment call, but it sends one datagram per segment, which
+        at LAN_COMMAND_SPACING would make painting all 10 segments take 1 s.
 
         Not verified: devStatus has no per-segment state (see
         _on_device_update), so segment state here is optimistic - what we
         last sent, not what the device reports.
         """
         self._require_device()
-        count = self._segment_count
-        masks: dict[tuple[int, int, int], int] = {}
-        for index, color in colors.items():
-            if not 0 <= index < count:
-                raise HomeAssistantError(
-                    f"Segment {index + 1} out of range for Govee {self.sku} (1-{count})"
-                )
-            masks[color] = masks.get(color, 0) | (1 << index)
-        if not masks:
+        packets = GoveeBLE.build_segment_packets(colors, self._segment_count, self.sku)
+        if not packets:
             return
-        packets = [
-            GoveeBLE.build_single_packet(
-                GoveeBLE.LEDCommand.COLOR,
-                [GoveeBLE.LEDMode.SEGMENTS, 0x01, r, g, b,
-                 0x00, 0x00, 0x00, 0x00, 0x00, mask & 0xFF, (mask >> 8) & 0xFF],
-            )
-            for (r, g, b), mask in masks.items()
-        ]
         await self._paced(lambda: self._send_raw(PtRealMessage(packets, do_checksum=False)))
+        # A pending whole-strip colour/CT expectation no longer holds - its
+        # resend would paint over these segments - and the strip has left
+        # colour-temperature mode, as on BLE.
+        self._expected.pop("rgb", None)
+        self._expected.pop("kelvin", None)
+        self.color_temp_kelvin = None
         for index, color in colors.items():
             self.segment_colors[index] = color
+        if 0 in colors:
+            # As on BLE: the whole-strip colour is segment 1's.
+            self.rgb_color = colors[0]
         self.async_set_updated_data(self._state_snapshot())
 
     async def async_set_effect(self, ptreal_cmds: list[str]) -> None:
