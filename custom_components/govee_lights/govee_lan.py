@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 import time
 from typing import TYPE_CHECKING, Any
@@ -444,20 +444,19 @@ class GoveeLANCoordinator(GoveeCoordinator):
     # ── LAN internals ─────────────────────────────────────────────────────
 
     def _send_raw(self, message: GoveeMessage) -> None:
-        """Send one message as a single UDP datagram via the controller transport.
+        """Send one message as a single UDP datagram via the controller.
 
         For what govee-local-api has no single-datagram call for: multi-packet
         ptReal (scenes, grouped segments) and one-shot devStatus queries (its
         ``send_update_message`` also re-arms its own 10 s poll, so every call
-        would add another polling chain).
+        would add another polling chain). The controller picks the transport
+        (one per listening interface) the device was discovered on.
         """
         device = self._require_device()
-        if self.controller is None or self.controller._transport is None:  # type: ignore[attr-defined]
+        if self.controller is None or not self.controller._transports:  # type: ignore[attr-defined]
             _LOGGER.warning("LAN controller transport not ready; cannot send %s", message.command)
             return
-        transport = self.controller._transport  # type: ignore[attr-defined]
-        port = self.controller._device_command_port  # type: ignore[attr-defined]
-        transport.sendto(bytes(message), (device.ip, port))
+        self.controller._send_message(message, device)  # type: ignore[attr-defined]
 
     async def _paced(self, send: Callable[[], Awaitable[None] | None]) -> None:
         """Run one device write, at least LAN_COMMAND_SPACING after the last."""
@@ -603,7 +602,7 @@ class GoveeLANCoordinator(GoveeCoordinator):
             return
 
         if self._available:
-            age = (datetime.now() - self.device.lastseen).total_seconds()
+            age = (datetime.now(timezone.utc) - self.device.lastseen).total_seconds()
             if age > LAN_OFFLINE_AFTER_SECONDS:
                 _LOGGER.info("LAN device %s (%s) is unreachable", self.sku, self.ip)
                 self._available = False

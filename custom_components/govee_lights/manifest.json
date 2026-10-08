@@ -11,7 +11,7 @@
         }
     ],
     "codeowners": ["@Jaano"],
-    "requirements": ["bleak-retry-connector", "requests>=2.31.0", "govee-local-api>=2.3.0"],
+    "requirements": ["bleak-retry-connector", "requests>=2.31.0", "govee-local-api>=3.1.0"],
     "dependencies": ["network"],
     "issue_tracker": "https://github.com/Jaano/govee_lights/issues",
     "documentation": "https://github.com/Jaano/govee_lights",
