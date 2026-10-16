@@ -3,7 +3,7 @@
     "flow_title": "{name}",
     "step": {
       "user": {
-        "title": "Set up Govee Lights",
+        "title": "Set up Govee Lights (++)",
         "data": {
           "type": "Connection type"
         },

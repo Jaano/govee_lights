@@ -3,7 +3,7 @@
     "flow_title": "{name}",
     "step": {
       "user": {
-        "title": "Seadista Govee tuled",
+        "title": "Seadista Govee Lights (++)",
         "data": {
           "type": "Ühenduse tüüp"
         },

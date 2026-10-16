@@ -1,4 +1,4 @@
-# Enhanced Govee Lights for Home Assistant
+# Govee Lights (++) for Home Assistant
 
 ![Home Assistant](https://img.shields.io/badge/home%20assistant-%2341BDF5.svg?style=for-the-badge&logo=home-assistant&logoColor=white)
 [![hacs](https://img.shields.io/badge/HACS-Integration-blue.svg?style=for-the-badge)](https://github.com/hacs/integration)
@@ -23,9 +23,16 @@ Controls Govee lighting from Home Assistant over local LAN or direct BLE. No clo
 
 ## Installation
 
-1. [Install HACS](https://hacs.xyz/docs/use/).
-2. Find **Enhanced Govee Lights** in the HACS integrations list and install it.
-3. Restart Home Assistant.
+Add this fork manually as a HACS custom repository:
+
+1. Open **HACS** in Home Assistant.
+2. Open the **⋮** menu in the top right and select **Custom repositories**.
+3. Enter **Repository:** `https://github.com/Jaano/govee_lights` and select **Type:** `Integration`.
+4. Click **Add**, then find **Govee Lights (++)** in HACS and click **Download**.
+5. Restart Home Assistant.
+6. Go to **Settings → Devices & Services → Add Integration**, search for **Govee Lights (++)**, and follow the setup steps.
+
+Updates from this repository will appear in HACS. Install the update and restart Home Assistant.
 
 ## Configuration
 
@@ -79,7 +86,7 @@ Replace `H617C` with your model SKU.
 
 Via the HA UI: Settings > Devices & Services, find the entry, open the three-dot menu, select Delete.
 
-Via HACS: open HACS > Integrations, find Enhanced Govee Lights, three-dot menu > Remove, then restart HA.
+Via HACS: open HACS > Integrations, find Govee Lights (++), three-dot menu > Remove, then restart HA.
 
 ---
 
