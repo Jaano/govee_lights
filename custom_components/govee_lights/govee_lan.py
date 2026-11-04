@@ -453,7 +453,7 @@ class GoveeLANCoordinator(GoveeCoordinator):
         (one per listening interface) the device was discovered on.
         """
         device = self._require_device()
-        if self.controller is None or not self.controller._transports:  # type: ignore[attr-defined]
+        if self.controller is None or not self.controller.protocols:
             _LOGGER.warning("LAN controller transport not ready; cannot send %s", message.command)
             return
         self.controller._send_message(message, device)  # type: ignore[attr-defined]
