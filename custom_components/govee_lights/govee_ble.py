@@ -39,9 +39,11 @@ from .govee import GoveeHelper
 from .models import (
     get_segment_count,
     has_advert_state,
+    has_segment_brightness,
     is_segmented_model,
     uses_colour_d_mode,
     uses_percent_brightness,
+    uses_segmented_white,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -421,6 +423,10 @@ class GoveeBLECoordinator(GoveeCoordinator):
         self.mode: int | None = None
         self.music_mode_id: int | None = None
         self.segment_colors = [None] * self.segment_count
+        # Per-segment brightness (same scale as brightness_raw) for
+        # models with a real segment-brightness command; None = unknown.
+        # Only populated from SEGMENT readback, like segment_colors.
+        self.segment_brightness: list[int | None] = [None] * self.segment_count
 
         self._issue_key = f"ble_needs_pairing_{address.replace(':', '')}"
 
@@ -475,6 +481,11 @@ class GoveeBLECoordinator(GoveeCoordinator):
     @property
     def segment_count(self) -> int:
         return get_segment_count(self.model) if is_segmented_model(self.model) else 0
+
+    @property
+    def segment_brightness_supported(self) -> bool:
+        """Whether this model has a real per-segment brightness command."""
+        return has_segment_brightness(self.model)
 
     @property
     def segment_readback(self) -> bool:
@@ -680,17 +691,45 @@ class GoveeBLECoordinator(GoveeCoordinator):
         white-balance/CT mode rather than plain RGB mode.  Without it the device
         accepts the colour but the on-device mode byte stays MANUAL (0x02) and
         future state-query notifications return a garbled colour.
+
+        Segmented-white models (e.g. H7015) use a different packet instead:
+          33 05 15 01 00 00 00 <temp BE> <r> <g> <b> <mask> ... checksum
+        Primary RGB is zero, the temperature field is big-endian, and the
+        triplet is the rendered colour.  Verified on H7015: a nonzero
+        temperature field selects white mode and the triplet renders
+        regardless of the temperature value (crossed pairs render their
+        triplet; temp 0 falls back to primary RGB), so temp=kelvin with
+        the kelvin_to_rgb triplet is a valid CT command for these models.
         """
         r, g, b = GoveeBLE.kelvin_to_rgb(kelvin)
-        mode_byte = (
-            GoveeBLE.LEDMode.COLOUR_D
-            if uses_colour_d_mode(self.model)
-            else GoveeBLE.LEDMode.MANUAL
-        )
-        packet = GoveeBLE.build_single_packet(
-            GoveeBLE.LEDCommand.COLOR,
-            [mode_byte, 0xFF, 0xFF, 0xFF, 0x01, r, g, b],
-        )
+        if uses_segmented_white(self.model):
+            packet = GoveeBLE.build_single_packet(
+                GoveeBLE.LEDCommand.COLOR,
+                [
+                    GoveeBLE.LEDMode.SEGMENTS,
+                    0x01,
+                    0x00,
+                    0x00,
+                    0x00,
+                    (kelvin >> 8) & 0xFF,
+                    kelvin & 0xFF,
+                    r,
+                    g,
+                    b,
+                    0xFF,
+                    0x7F,
+                ],
+            )
+        else:
+            mode_byte = (
+                GoveeBLE.LEDMode.COLOUR_D
+                if uses_colour_d_mode(self.model)
+                else GoveeBLE.LEDMode.MANUAL
+            )
+            packet = GoveeBLE.build_single_packet(
+                GoveeBLE.LEDCommand.COLOR,
+                [mode_byte, 0xFF, 0xFF, 0xFF, 0x01, r, g, b],
+            )
         self.color_temp_kelvin = kelvin
         self.rgb_color = (r, g, b)
         self.segment_colors = [(r, g, b)] * self.segment_count
@@ -715,6 +754,45 @@ class GoveeBLECoordinator(GoveeCoordinator):
             self.rgb_color = colors[0]
         await self.send_commands(packets, verify=verify)
         self.async_set_updated_data(self._state_snapshot())
+
+    async def async_set_segment_brightness(
+        self, index: int, brightness: int, *, verify: bool = True
+    ) -> None:
+        """Set one segment's brightness (HA scale 0-255) on models with a
+        real segment-brightness command (SEGMENTS subcommand 0x02:
+        brightness byte, then the segment mask, little-endian).
+
+        The segment's colour is untouched: SEGMENT readback keeps the
+        colour and reports the new brightness separately.  Raises for
+        models without the command; callers should gate on
+        segment_brightness_supported.
+        """
+        if not has_segment_brightness(self.model):
+            raise HomeAssistantError(
+                f"Govee {self.model} has no per-segment brightness command"
+            )
+        if not 0 <= index < self.segment_count:
+            raise HomeAssistantError(
+                f"Segment {index + 1} out of range for Govee {self.model} "
+                f"(1-{self.segment_count})"
+            )
+        val = (
+            round(brightness * 100 / 255)
+            if uses_percent_brightness(self.model)
+            else brightness
+        )
+        mask = 1 << index
+        packet = GoveeBLE.build_single_packet(
+            GoveeBLE.LEDCommand.COLOR,
+            [
+                GoveeBLE.LEDMode.SEGMENTS,
+                0x02,
+                val,
+                mask & 0xFF,
+                (mask >> 8) & 0xFF,
+            ],
+        )
+        await self.send_command(packet, verify=verify)
 
     async def async_set_effect(self, ptreal_cmds: list[str]) -> None:
         """Apply a ptReal scene effect and power the device on."""
@@ -941,7 +1019,14 @@ class GoveeBLECoordinator(GoveeCoordinator):
                     # _apply_segment_readback: the SEGMENT colour answer
                     # comes in CT mode too, and clearing CT on it wiped a
                     # just-set colour temperature on every verify.
-                    self.color_temp_kelvin = None
+                    # Exception: segmented-white models (e.g. H7015) use
+                    # SEGMENTS mode for white as well as RGB, and their
+                    # AA 05 reply cannot distinguish the two — so do not
+                    # clear CT on mode alone for them.  Their RGB paths
+                    # (async_set_rgb_color, async_set_segment_colors)
+                    # already clear color_temp_kelvin explicitly.
+                    if not uses_segmented_white(self.model):
+                        self.color_temp_kelvin = None
                 # SEGMENTS mode: no colour read here. This domain's
                 # SEGMENTS-mode response was previously
                 # (mis)read for colour too (payload[2:5]), but verified
@@ -994,6 +1079,8 @@ class GoveeBLECoordinator(GoveeCoordinator):
                 self.segment_colors[index] = (
                     payload[offset + 1], payload[offset + 2], payload[offset + 3]
                 )
+                if 0 <= index < len(self.segment_brightness):
+                    self.segment_brightness[index] = payload[offset]
         if group == 1:
             self.rgb_color = (payload[2], payload[3], payload[4])
 
