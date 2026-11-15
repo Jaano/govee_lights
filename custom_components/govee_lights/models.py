@@ -22,6 +22,17 @@ Per-model flags:
 - ``advert_state``: device broadcasts on/off state in its BLE advertisement
   (as ``ec 00 0a 01 <state>``), so power state can be tracked passively
   without an open GATT connection.
+- ``segmented_white``: device takes colour temperature as a SEGMENTS
+  (0x15) packet with primary RGB zero, a big-endian temperature-like
+  field, and an additional RGB triplet, instead of the MANUAL/COLOUR_D
+  packet (``FF FF FF 01 R G B``). The triplet is the rendered colour;
+  a nonzero temperature field only selects white mode.
+- ``segment_brightness``: device supports a per-segment brightness
+  command (SEGMENTS subcommand 0x02: brightness byte, then the segment
+  mask), so segment brightness is a real command, not colour scaling.
+- ``dark_near_black``: device reports a dark segment as (1, 1, 1) in
+  SEGMENT readback, not (0, 0, 0), so (1, 1, 1) must be treated as dark
+  for segment on/off state.
 """
 
 from __future__ import annotations
@@ -54,6 +65,19 @@ _DEVICE_FEATURES: dict[str, dict[str, bool | int]] = {
     "H617E": {"segmented": True, "brightness_percent": True, "colour_d": True},
     "H618C": {"segmented": True, "brightness_percent": True},
     "H6199": {"segmented": True, "brightness_percent": True},
+    # H7015 (48 ft, 15 S14 bulbs, Bluetooth-only string): segmented RGB
+    # via 33 05 15 01, percent brightness, per-segment brightness via
+    # 33 05 15 02, segmented white via 33 05 15 01 with temp field +
+    # triplet, dark reported as (1, 1, 1). Verified against real
+    # hardware (see GOVEE_BLE.md, H7015 notes); no encryption handshake.
+    "H7015": {
+        "segmented": True,
+        "segments": 15,
+        "brightness_percent": True,
+        "segmented_white": True,
+        "segment_brightness": True,
+        "dark_near_black": True,
+    },
 }
 
 
@@ -97,6 +121,21 @@ def uses_colour_d_mode(model: str) -> bool:
 def has_advert_state(model: str) -> bool:
     """Return True when *model* broadcasts on/off state in its BLE advert."""
     return bool(_model_features(model).get("advert_state", False))
+
+
+def uses_segmented_white(model: str) -> bool:
+    """Return True when *model* takes colour temperature as a SEGMENTS packet."""
+    return bool(_model_features(model).get("segmented_white", False))
+
+
+def has_segment_brightness(model: str) -> bool:
+    """Return True when *model* supports the per-segment brightness command."""
+    return bool(_model_features(model).get("segment_brightness", False))
+
+
+def reports_dark_as_near_black(model: str) -> bool:
+    """Return True when *model* reports a dark segment as (1, 1, 1)."""
+    return bool(_model_features(model).get("dark_near_black", False))
 
 
 def get_segment_count(model: str) -> int:

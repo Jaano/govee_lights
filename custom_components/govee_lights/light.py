@@ -30,6 +30,7 @@ import voluptuous as vol
 from .const import CONF_FADE, CONF_FADE_OFF, CONF_FADE_ON, CONF_LAN_SKU, DEFAULT_FADE, DOMAIN
 from .fade import FADE_INTERVAL, run_fade
 from .govee_ble import GoveeBLE
+from .models import reports_dark_as_near_black, uses_percent_brightness
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -533,23 +534,49 @@ class GoveeSegmentLight(LightEntity):
         return not self._coordinator.segment_readback or self._color is None
 
     @property
+    def _dark_rgb(self) -> tuple[int, int, int]:
+        """The RGB value this device reports for a dark segment."""
+        if reports_dark_as_near_black(self._coordinator.device_key):
+            return (1, 1, 1)
+        return (0, 0, 0)
+
+    @property
     def is_on(self) -> bool:
         if not self._coordinator.is_on:
             return False
         color = self._color
-        return color is None or color != (0, 0, 0)
+        return color is None or color != self._dark_rgb
 
     @property
     def brightness(self) -> int | None:
+        # Models with a real segment-brightness command report it
+        # separately from colour; prefer it over max(channel), which
+        # would otherwise claim a dimmed segment is still at full
+        # brightness whenever its colour is saturated.
+        # Only for models with a real segment-brightness command; other
+        # models keep the previous max(channel) behaviour exactly.
+        values = (
+            getattr(self._coordinator, "segment_brightness", None)
+            if getattr(self._coordinator, "segment_brightness_supported", False)
+            else None
+        )
+        if values is not None and self._index < len(values):
+            value = values[self._index]
+            if value is not None:
+                if uses_percent_brightness(self._coordinator.device_key):
+                    return round(value * 255 / 100)
+                return value
         color = self._color
         return max(color) if color else None
 
     @property
     def rgb_color(self) -> tuple[int, int, int] | None:
         color = self._color
-        if not color or max(color) == 0:
+        if not color or color == self._dark_rgb:
             return None
         peak = max(color)
+        if peak == 0:
+            return None
         r, g, b = (round(channel * 255 / peak) for channel in color)
         return (r, g, b)
 
@@ -564,12 +591,30 @@ class GoveeSegmentLight(LightEntity):
         self.async_on_remove(hub.async_add_listener(self.async_write_ha_state))
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        base = kwargs.get(ATTR_RGB_COLOR) or self.rgb_color or (255, 255, 255)
-        current = self.brightness
-        brightness = kwargs.get(ATTR_BRIGHTNESS) or (current if current else 255)
         hub = self._coordinator
         if not hub.is_on:
             await hub.async_turn_on()
+        if getattr(hub, "segment_brightness_supported", False):
+            # Real per-segment brightness: colour and brightness are
+            # separate commands on these models, so do not scale the
+            # colour to emulate brightness.
+            if ATTR_RGB_COLOR in kwargs:
+                await hub.async_set_segment_colors(
+                    {self._index: tuple(kwargs[ATTR_RGB_COLOR])}
+                )
+            if ATTR_BRIGHTNESS in kwargs:
+                await hub.async_set_segment_brightness(
+                    self._index, kwargs[ATTR_BRIGHTNESS]
+                )
+            if ATTR_RGB_COLOR not in kwargs and ATTR_BRIGHTNESS not in kwargs:
+                # Bare turn-on: restore the segment's last colour at its
+                # last brightness, or white at full brightness if unknown.
+                base = self.rgb_color or (255, 255, 255)
+                await hub.async_set_segment_colors({self._index: tuple(base)})
+            return
+        base = kwargs.get(ATTR_RGB_COLOR) or self.rgb_color or (255, 255, 255)
+        current = self.brightness
+        brightness = kwargs.get(ATTR_BRIGHTNESS) or (current if current else 255)
         await hub.async_set_segment_colors({self._index: _scale(tuple(base), brightness)})
 
     async def async_turn_off(self, **kwargs: Any) -> None:

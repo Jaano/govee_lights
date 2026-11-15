@@ -135,7 +135,7 @@ HA  →  device:  33 01 00 00 … <chk>   (×3, 50 ms apart)
 
 ### 2.3 Brightness
 
-Brightness is HA scale 0–255. For `PERCENT_MODELS` (H617A, H617C) it is converted: `val = brightness * 100 / 255`.
+Brightness is HA scale 0–255. For `PERCENT_MODELS` (H617A, H617C, H7015) it is converted: `val = brightness * 100 / 255`.
 
 ```
 HA  →  device:  33 04 <val> 00 … <chk>
@@ -149,7 +149,7 @@ HA  →  device:  33 05 02 <R> <G> <B> 00 … <chk>
                          mode = MANUAL (0x02)
 ```
 
-### 2.5 RGB color (segmented models: H6053, H6072, H6102, H6199, H617A, H617C)
+### 2.5 RGB color (segmented models: H6053, H6072, H6102, H6199, H617A, H617C, H7015)
 
 ```
 HA  →  device:  33 05 15 01 <R> <G> <B> 00 00 00 00 00 FF 7F 00 … <chk>
@@ -165,6 +165,48 @@ Kelvin is converted to RGB via Tanner Helland's curve-fit algorithm (clamped to 
 kelvin → (R, G, B)
 HA  →  device:  33 05 02 <R> <G> <B> 00 … <chk>   (or SEGMENTS variant)
 ```
+
+### 2.6a H7015 notes (verified against real hardware, Oct 2026)
+
+H7015 is a 48 ft, 15-bulb Bluetooth-only string (advertised name
+`Govee_H7015_2B24`). It needs no encryption handshake. Its plain RGB
+packet (`33 05 02`) is silently ignored — only the SEGMENTS form works
+— and its advertisement carries no service UUIDs, so discovery relies
+on the `Govee_*` name pattern.
+
+Segmented white (colour temperature) uses a different packet from §2.6:
+```
+HA  →  device:  33 05 15 01 00 00 00 <temp BE> <R> <G> <B> FF 7F 00 … <chk>
+```
+Primary RGB is zero, the temperature field is big-endian, and the
+triplet is the rendered colour. Verified: temp 2000 + `FF 8D 0B`
+(warmest) and temp 9000 + `D9 E1 FF` (coldest) replay the app's frames
+exactly, and crossed pairs (warm triplet at temp 5000, cold triplet at
+temp 2000, temp 5000 + pure red) all render their triplet — so a nonzero
+temperature field only selects white mode and the triplet drives, while
+temp 0 falls back to primary RGB. The integration therefore sends
+temp=kelvin with the Tanner-Helland triplet; the app's own curve
+differs slightly (e.g. 2000 K: app `FF 8D 0B` vs Tanner `(255,137,14)`),
+so app-exact whites are a refinement, not a requirement. AA 05 reports
+mode `0x15` for both RGB and white on this model, so CT state is
+tracked from the last CT command, not from the mode byte.
+
+Per-segment brightness is a real command, not colour scaling:
+```
+HA  →  device:  33 05 15 02 <val> <mask_lo> <mask_hi> 00 … <chk>
+```
+Verified: value 50 on bulb 8 alone reads back brightness 50 with RGB
+unchanged and neighbours at 100. Segment entities use this command and
+report the read-back brightness; colour writes preserve brightness.
+
+Dark segments read back as (1, 1, 1), not (0, 0, 0): writing (0, 0, 0)
+to a segment is accepted and then reported as (1, 1, 1), so segment
+on/off state treats (1, 1, 1) as dark. The main light is unaffected
+(it turns off via the power command). The link drops after ~10 s idle;
+the coordinator's 5 s idle disconnect sits inside that window, and an
+AA 01 query every 4 s was verified as a keepalive if a held connection
+is ever wanted. Scenes and music mode are untested on H7015 and are
+out of scope for this profile.
 
 ### 2.7 Music mode
 
